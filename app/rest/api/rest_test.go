@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/umputun/remark/app/migrator"
+	"github.com/umputun/remark/app/rest"
 	"github.com/umputun/remark/app/rest/auth"
 	"github.com/umputun/remark/app/rest/proxy"
 	"github.com/umputun/remark/app/store"
@@ -28,7 +29,7 @@ import (
 var testDb = "/tmp/test-remark.db"
 var testHTML = "/tmp/test-remark.html"
 
-func TestServer_Ping(t *testing.T) {
+func TestRest_Ping(t *testing.T) {
 	srv, ts := prep(t)
 	require.NotNil(t, srv)
 	defer cleanup(ts)
@@ -38,7 +39,7 @@ func TestServer_Ping(t *testing.T) {
 	assert.Equal(t, 200, code)
 }
 
-func TestServer_Create(t *testing.T) {
+func TestRest_Create(t *testing.T) {
 	srv, ts := prep(t)
 	require.NotNil(t, srv)
 	defer cleanup(ts)
@@ -46,7 +47,7 @@ func TestServer_Create(t *testing.T) {
 	resp, err := post(t, ts.URL+"/api/v1/comment",
 		`{"text": "test 123", "locator":{"url": "https://radio-t.com/blah1", "site": "radio-t"}}`)
 	assert.Nil(t, err)
-	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	b, err := ioutil.ReadAll(resp.Body)
 	assert.Nil(t, err)
@@ -59,7 +60,41 @@ func TestServer_Create(t *testing.T) {
 	assert.True(t, len(c["id"].(string)) > 8)
 }
 
-func TestServer_CreateTooBig(t *testing.T) {
+func TestRest_CreateOldPost(t *testing.T) {
+	srv, ts := prep(t)
+	require.NotNil(t, srv)
+	defer cleanup(ts)
+
+	// make old, but not too old comment
+	old := store.Comment{Text: "test test old", ParentID: "", Timestamp: time.Now().AddDate(0, 0, -5),
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah1"}, User: store.User{ID: "u1"}}
+	_, err := srv.DataService.Create(old)
+	assert.Nil(t, err)
+
+	comments, err := srv.DataService.Find(store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah1"}, "time")
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(comments))
+
+	// try to add new comment to the same old post
+	resp, err := post(t, ts.URL+"/api/v1/comment",
+		`{"text": "test 123", "locator":{"site": "radio-t","url": "https://radio-t.com/blah1"}}`)
+	assert.Nil(t, err)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	assert.Nil(t, srv.DataService.DeleteAll("radio-t"))
+	// make too old comment
+	old = store.Comment{Text: "test test old", ParentID: "", Timestamp: time.Now().AddDate(0, 0, -15),
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah1"}, User: store.User{ID: "u1"}}
+	_, err = srv.DataService.Create(old)
+	assert.Nil(t, err)
+
+	resp, err = post(t, ts.URL+"/api/v1/comment",
+		`{"text": "test 123", "locator":{"site": "radio-t","url": "https://radio-t.com/blah1"}}`)
+	assert.Nil(t, err)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestRest_CreateTooBig(t *testing.T) {
 	srv, ts := prep(t)
 	require.NotNil(t, srv)
 	defer cleanup(ts)
@@ -79,7 +114,7 @@ func TestServer_CreateTooBig(t *testing.T) {
 	assert.Equal(t, "invalid comment", c["details"])
 }
 
-func TestServer_Preview(t *testing.T) {
+func TestRest_Preview(t *testing.T) {
 	srv, ts := prep(t)
 	require.NotNil(t, srv)
 	defer cleanup(ts)
@@ -92,7 +127,7 @@ func TestServer_Preview(t *testing.T) {
 	assert.Equal(t, "<p>test 123</p>\n", string(b))
 }
 
-func TestServer_PreviewWithMD(t *testing.T) {
+func TestRest_PreviewWithMD(t *testing.T) {
 	srv, ts := prep(t)
 	require.NotNil(t, srv)
 	defer cleanup(ts)
@@ -101,7 +136,7 @@ func TestServer_PreviewWithMD(t *testing.T) {
 # h1
 
 BKT
-func TestServer_Preview(t *testing.T) {
+func TestRest_Preview(t *testing.T) {
 srv, ts := prep(t)
   require.NotNil(t, srv)
 }
@@ -117,10 +152,10 @@ BKT
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	b, err := ioutil.ReadAll(resp.Body)
 	assert.Nil(t, err)
-	assert.Equal(t, "<h1>h1</h1>\n\n<pre><code>func TestServer_Preview(t *testing.T) {\nsrv, ts := prep(t)\n  require.NotNil(t, srv)\n}\n</code></pre>\n", string(b))
+	assert.Equal(t, "<h1>h1</h1>\n\n<pre><code>func TestRest_Preview(t *testing.T) {\nsrv, ts := prep(t)\n  require.NotNil(t, srv)\n}\n</code></pre>\n", string(b))
 }
 
-func TestServer_CreateAndGet(t *testing.T) {
+func TestRest_CreateAndGet(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -152,7 +187,7 @@ func TestServer_CreateAndGet(t *testing.T) {
 	t.Logf("%+v", comment)
 }
 
-func TestServer_Find(t *testing.T) {
+func TestRest_Find(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -160,13 +195,14 @@ func TestServer_Find(t *testing.T) {
 	_, code := get(t, ts.URL+"/api/v1/find?site=radio-t&url=https://radio-t.com/blah1")
 	assert.Equal(t, 400, code, "nothing in")
 
-	c1 := store.Comment{Text: "test test #1", ParentID: "p1",
+	c1 := store.Comment{Text: "test test #1", ParentID: "",
 		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah1"}}
-	c2 := store.Comment{Text: "test test #2", ParentID: "p1",
-		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah1"}}
-
 	id1 := addComment(t, c1, ts)
+
+	c2 := store.Comment{Text: "test test #2", ParentID: id1,
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah1"}}
 	id2 := addComment(t, c2, ts)
+
 	assert.NotEqual(t, id1, id2)
 
 	// get sorted by +time
@@ -187,9 +223,95 @@ func TestServer_Find(t *testing.T) {
 	assert.Equal(t, 2, len(comments), "should have 2 comments")
 	assert.Equal(t, id1, comments[1].ID)
 	assert.Equal(t, id2, comments[0].ID)
+
+	// get in tree mode
+	tree := rest.Tree{}
+	res, code = get(t, ts.URL+"/api/v1/find?site=radio-t&url=https://radio-t.com/blah1&format=tree")
+	assert.Equal(t, 200, code)
+	err = json.Unmarshal([]byte(res), &tree)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(tree.Nodes))
+	assert.Equal(t, 1, len(tree.Nodes[0].Replies))
+	assert.Equal(t, 2, tree.Info.Count)
+	assert.Equal(t, "https://radio-t.com/blah1", tree.Info.URL)
+	assert.False(t, tree.Info.ReadOnly, "post is fresh")
 }
 
-func TestServer_Update(t *testing.T) {
+func TestRest_FindAge(t *testing.T) {
+	srv, ts := prep(t)
+	assert.NotNil(t, srv)
+	defer cleanup(ts)
+
+	c1 := store.Comment{Text: "test test #1", ParentID: "", Timestamp: time.Now().AddDate(0, 0, -5),
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah1"}, User: store.User{ID: "u1"}}
+	_, err := srv.DataService.Create(c1)
+	require.Nil(t, err)
+
+	c2 := store.Comment{Text: "test test #2", ParentID: "", Timestamp: time.Now().AddDate(0, 0, -15),
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah2"}, User: store.User{ID: "u1"}}
+	_, err = srv.DataService.Create(c2)
+	require.Nil(t, err)
+
+	tree := rest.Tree{}
+
+	res, code := get(t, ts.URL+"/api/v1/find?site=radio-t&url=https://radio-t.com/blah1&format=tree")
+	assert.Equal(t, 200, code)
+	err = json.Unmarshal([]byte(res), &tree)
+	assert.Nil(t, err)
+	assert.Equal(t, "https://radio-t.com/blah1", tree.Info.URL)
+	assert.False(t, tree.Info.ReadOnly, "post is fresh")
+
+	res, code = get(t, ts.URL+"/api/v1/find?site=radio-t&url=https://radio-t.com/blah2&format=tree")
+	assert.Equal(t, 200, code)
+	err = json.Unmarshal([]byte(res), &tree)
+	assert.Nil(t, err)
+	assert.Equal(t, "https://radio-t.com/blah2", tree.Info.URL)
+	assert.True(t, tree.Info.ReadOnly, "post is old")
+}
+
+func TestRest_FindReadOnly(t *testing.T) {
+	srv, ts := prep(t)
+	assert.NotNil(t, srv)
+	defer cleanup(ts)
+
+	c1 := store.Comment{Text: "test test #1", ParentID: "", Timestamp: time.Now().AddDate(0, 0, -1),
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah1"}, User: store.User{ID: "u1"}}
+	_, err := srv.DataService.Create(c1)
+
+	require.Nil(t, err)
+
+	c2 := store.Comment{Text: "test test #2", ParentID: "", Timestamp: time.Now().AddDate(0, 0, -2),
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah2"}, User: store.User{ID: "u1"}}
+	_, err = srv.DataService.Create(c2)
+	require.Nil(t, err)
+
+	// set post to read-only
+	client := http.Client{}
+	req, err := http.NewRequest(http.MethodPut,
+		fmt.Sprintf("%s/api/v1/admin/readonly?site=radio-t&url=https://radio-t.com/blah1&ro=1", ts.URL), nil)
+	assert.Nil(t, err)
+	withBasicAuth(req, "dev", "password")
+	_, err = client.Do(req)
+	require.Nil(t, err)
+
+	tree := rest.Tree{}
+	res, code := get(t, ts.URL+"/api/v1/find?site=radio-t&url=https://radio-t.com/blah1&format=tree")
+	assert.Equal(t, 200, code)
+	err = json.Unmarshal([]byte(res), &tree)
+	require.Nil(t, err)
+	assert.Equal(t, "https://radio-t.com/blah1", tree.Info.URL)
+	assert.True(t, tree.Info.ReadOnly, "post is ro")
+
+	tree = rest.Tree{}
+	res, code = get(t, ts.URL+"/api/v1/find?site=radio-t&url=https://radio-t.com/blah2&format=tree")
+	assert.Equal(t, 200, code)
+	err = json.Unmarshal([]byte(res), &tree)
+	require.Nil(t, err)
+	assert.Equal(t, "https://radio-t.com/blah2", tree.Info.URL)
+	assert.False(t, tree.Info.ReadOnly, "post is writable")
+}
+
+func TestRest_Update(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -228,7 +350,39 @@ func TestServer_Update(t *testing.T) {
 	assert.Equal(t, c2, c3, "same as response from update")
 }
 
-func TestServer_Last(t *testing.T) {
+func TestRest_UpdateNotOwner(t *testing.T) {
+	srv, ts := prep(t)
+	assert.NotNil(t, srv)
+	defer cleanup(ts)
+
+	c1 := store.Comment{Text: "test test #1", ParentID: "p1",
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah1"}, User: store.User{ID: "xyz"}}
+	id1, err := srv.DataService.Create(c1)
+	assert.Nil(t, err)
+
+	client := http.Client{}
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/v1/comment/"+id1+
+		"?site=radio-t&url=https://radio-t.com/blah1", strings.NewReader(`{"text":"updated text", "summary":"my edit"}`))
+	assert.Nil(t, err)
+	req = withBasicAuth(req, "dev", "password")
+	b, err := client.Do(req)
+	assert.Nil(t, err)
+	body, err := ioutil.ReadAll(b.Body)
+	assert.Nil(t, err)
+	assert.Equal(t, 403, b.StatusCode, string(body), "update from non-owner")
+	assert.Equal(t, `{"details":"can not edit comments for other users","error":"rejected"}`+"\n", string(body))
+
+	client = http.Client{}
+	req, err = http.NewRequest(http.MethodPut, ts.URL+"/api/v1/comment/"+id1+
+		"?site=radio-t&url=https://radio-t.com/blah1", strings.NewReader(`ERRR "text":"updated text", "summary":"my"}`))
+	assert.Nil(t, err)
+	req = withBasicAuth(req, "dev", "password")
+	b, err = client.Do(req)
+	assert.Nil(t, err)
+	assert.Equal(t, 400, b.StatusCode, string(body), "update is not json")
+}
+
+func TestRest_Last(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -257,9 +411,23 @@ func TestServer_Last(t *testing.T) {
 	err = json.Unmarshal([]byte(res), &comments)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(comments), "should have 3 comments")
+
+	res, code = get(t, ts.URL+"/api/v1/last/X?site=radio-t")
+	assert.Equal(t, 200, code)
+	err = json.Unmarshal([]byte(res), &comments)
+	assert.Nil(t, err)
+	assert.Equal(t, 3, len(comments), "should have 3 comments")
+
+	err = srv.DataService.Delete(store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah1"}, id1, store.SoftDelete)
+	assert.Nil(t, err)
+	res, code = get(t, ts.URL+"/api/v1/last/5?site=radio-t")
+	assert.Equal(t, 200, code)
+	err = json.Unmarshal([]byte(res), &comments)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(comments), "should have 2 comments")
 }
 
-func TestServer_FindUserComments(t *testing.T) {
+func TestRest_FindUserComments(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -291,7 +459,7 @@ func TestServer_FindUserComments(t *testing.T) {
 	assert.Equal(t, 3, resp.Count, "should have 3 count")
 }
 
-func TestServer_UserInfo(t *testing.T) {
+func TestRest_UserInfo(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -305,7 +473,7 @@ func TestServer_UserInfo(t *testing.T) {
 		Picture: "/api/v1/avatar/remark.image", Admin: true, Blocked: false, IP: ""}, user)
 }
 
-func TestServer_Vote(t *testing.T) {
+func TestRest_Vote(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -349,7 +517,7 @@ func TestServer_Vote(t *testing.T) {
 	assert.Equal(t, map[string]bool{}, cr.Votes)
 }
 
-func TestServer_Count(t *testing.T) {
+func TestRest_Count(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -379,7 +547,7 @@ func TestServer_Count(t *testing.T) {
 	assert.Equal(t, 2.0, j["count"])
 }
 
-func TestServer_Counts(t *testing.T) {
+func TestRest_Counts(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -409,7 +577,7 @@ func TestServer_Counts(t *testing.T) {
 		{URL: "https://radio-t.com/blah2", Count: 2}}), j)
 }
 
-func TestServer_List(t *testing.T) {
+func TestRest_List(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -430,10 +598,13 @@ func TestServer_List(t *testing.T) {
 	pi := []store.PostInfo{}
 	err := json.Unmarshal([]byte(body), &pi)
 	assert.Nil(t, err)
-	assert.Equal(t, []store.PostInfo{{URL: "https://radio-t.com/blah2", Count: 2}, {URL: "https://radio-t.com/blah1", Count: 3}}, pi)
+	assert.Equal(t, "https://radio-t.com/blah2", pi[0].URL)
+	assert.Equal(t, 2, pi[0].Count)
+	assert.Equal(t, "https://radio-t.com/blah1", pi[1].URL)
+	assert.Equal(t, 3, pi[1].Count)
 }
 
-func TestServer_Config(t *testing.T) {
+func TestRest_Config(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -448,10 +619,47 @@ func TestServer_Config(t *testing.T) {
 	assert.Equal(t, 4000., j["max_comment_size"])
 	assert.Equal(t, -5., j["low_score"])
 	assert.Equal(t, -10., j["critical_score"])
+	assert.Equal(t, 10., j["readonly_age"])
 	t.Logf("%+v", j)
 }
 
-func TestServer_FileServer(t *testing.T) {
+func TestRest_Info(t *testing.T) {
+	srv, ts := prep(t)
+	assert.NotNil(t, srv)
+	defer cleanup(ts)
+
+	user := store.User{ID: "user1", Name: "user name 1"}
+	c1 := store.Comment{User: user, Text: "test test #1", Locator: store.Locator{SiteID: "radio-t",
+		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 05, 27, 1, 14, 10, 0, time.Local)}
+	c2 := store.Comment{User: user, Text: "test test #2", ParentID: "p1", Locator: store.Locator{SiteID: "radio-t",
+		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 05, 27, 1, 14, 20, 0, time.Local)}
+	c3 := store.Comment{User: user, Text: "test test #3", ParentID: "p1", Locator: store.Locator{SiteID: "radio-t",
+		URL: "https://radio-t.com/blah1"}, Timestamp: time.Date(2018, 05, 27, 1, 14, 25, 0, time.Local)}
+
+	_, err := srv.DataService.Create(c1)
+	require.Nil(t, err, "%+v", err)
+	_, err = srv.DataService.Create(c2)
+	require.Nil(t, err)
+	_, err = srv.DataService.Create(c3)
+	require.Nil(t, err)
+
+	body, code := get(t, ts.URL+"/api/v1/info?site=radio-t&url=https://radio-t.com/blah1")
+	assert.Equal(t, 200, code)
+
+	info := store.PostInfo{}
+	err = json.Unmarshal([]byte(body), &info)
+	assert.Nil(t, err)
+	exp := store.PostInfo{URL: "https://radio-t.com/blah1", Count: 3,
+		FirstTS: time.Date(2018, 05, 27, 1, 14, 10, 0, time.Local), LastTS: time.Date(2018, 05, 27, 1, 14, 25, 0, time.Local)}
+	assert.Equal(t, exp, info)
+
+	_, code = get(t, ts.URL+"/api/v1/info?site=radio-t&url=https://radio-t.com/blah-no")
+	assert.Equal(t, 400, code)
+	_, code = get(t, ts.URL+"/api/v1/info?site=radio-t-no&url=https://radio-t.com/blah-no")
+	assert.Equal(t, 400, code)
+}
+
+func TestRest_FileServer(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -461,6 +669,18 @@ func TestServer_FileServer(t *testing.T) {
 	assert.Equal(t, "some html", body)
 }
 
+func TestRest_Shutdown(t *testing.T) {
+	srv := Rest{Authenticator: auth.Authenticator{},
+		AvatarProxy: &proxy.Avatar{StorePath: "/tmp", RoutePath: "/api/v1/avatar"}, ImageProxy: &proxy.Image{}}
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		srv.Shutdown()
+	}()
+	st := time.Now()
+	srv.Run(0)
+	assert.True(t, time.Since(st).Seconds() < 1, "should take about 100ms")
+}
+
 func prep(t *testing.T) (srv *Rest, ts *httptest.Server) {
 	b, err := engine.NewBoltDB(bolt.Options{}, engine.BoltSite{FileName: testDb, SiteID: "radio-t"})
 	require.Nil(t, err)
@@ -468,14 +688,16 @@ func prep(t *testing.T) (srv *Rest, ts *httptest.Server) {
 	srv = &Rest{
 		DataService: dataStore,
 		Authenticator: auth.Authenticator{
-			DevPasswd:   "password",
-			Providers:   nil,
-			AvatarProxy: &proxy.Avatar{StorePath: "/tmp", RoutePath: "/api/v1/avatar"},
-			Admins:      []string{"a1", "a2"},
+			DevPasswd: "password",
+			Providers: nil,
+			Admins:    []string{"a1", "a2"},
 		},
-		Exporter: &migrator.Remark{DataStore: &dataStore},
-		Cache:    &mockCache{},
-		WebRoot:  "/tmp",
+		Exporter:    &migrator.Remark{DataStore: &dataStore},
+		Cache:       &mockCache{},
+		WebRoot:     "/tmp",
+		AvatarProxy: &proxy.Avatar{StorePath: "/tmp", RoutePath: "/api/v1/avatar"},
+		ImageProxy:  &proxy.Image{},
+		ReadOnlyAge: 10,
 	}
 	srv.ScoreThresholds.Low, srv.ScoreThresholds.Critical = -5, -10
 
@@ -554,4 +776,4 @@ func (mc *mockCache) Get(key string, ttl time.Duration, fn func() ([]byte, error
 	return fn()
 }
 
-func (mc *mockCache) Flush() {}
+func (mc *mockCache) Flush(scopes ...string) {}

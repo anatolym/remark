@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	jwt "github.com/dgrijalva/jwt-go"
+	"github.com/dgrijalva/jwt-go"
 	"github.com/go-chi/chi"
 	"github.com/go-chi/render"
 	"golang.org/x/oauth2"
@@ -23,26 +23,25 @@ import (
 
 // Provider represents oauth2 provider
 type Provider struct {
+	Params
 	Name        string
 	RedirectURL string
 	InfoURL     string
 	Endpoint    oauth2.Endpoint
 	Scopes      []string
 	MapUser     func(userData, []byte) store.User // map info from InfoURL to User
-	Secret      string
-
-	avatarProxy *proxy.Avatar
-	conf        *oauth2.Config
-	jwtService  *JWT
+	conf        oauth2.Config
 }
 
 // Params to make initialized and ready to use provider
 type Params struct {
-	Cid         string
-	Csecret     string
 	RemarkURL   string
 	AvatarProxy *proxy.Avatar
 	JwtService  *JWT
+	SecretKey   string
+	Admins      []string
+	Cid         string
+	Csecret     string
 }
 
 type userData map[string]interface{}
@@ -56,19 +55,18 @@ func (u userData) value(key string) string {
 
 // newProvider makes auth for given provider
 func initProvider(p Params, provider Provider) Provider {
-	log.Printf("[INFO] create %s auth, id=%s, redir: %s", provider.Name, p.Cid, provider.RedirectURL)
-
-	conf := oauth2.Config{
-		ClientID:     p.Cid,
-		ClientSecret: p.Csecret,
+	log.Printf("[INFO] init auth provider %s", provider.Name)
+	provider.Params = p
+	provider.conf = oauth2.Config{
+		ClientID:     provider.Cid,
+		ClientSecret: provider.Csecret,
 		RedirectURL:  provider.RedirectURL,
 		Scopes:       provider.Scopes,
 		Endpoint:     provider.Endpoint,
 	}
 
-	provider.conf = &conf
-	provider.avatarProxy = p.AvatarProxy
-	provider.jwtService = p.JwtService
+	log.Printf("[DEBUG] created %s auth, id=%s, redir=%s, endpoint=%s",
+		provider.Name, provider.Cid, provider.Endpoint, provider.RedirectURL)
 	return provider
 }
 
@@ -84,6 +82,7 @@ func (p Provider) Routes() chi.Router {
 // loginHandler - GET /login?from=redirect-back-url
 func (p Provider) loginHandler(w http.ResponseWriter, r *http.Request) {
 
+	log.Printf("[DEBUG] login with %s", p.Name)
 	// make state (random) and store in session
 	state := p.randToken()
 
@@ -98,7 +97,7 @@ func (p Provider) loginHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	if err := p.jwtService.Set(w, &claims); err != nil {
+	if err := p.JwtService.Set(w, &claims); err != nil {
 		rest.SendErrorJSON(w, r, http.StatusInternalServerError, err, "failed to set jwt")
 		return
 	}
@@ -114,7 +113,7 @@ func (p Provider) loginHandler(w http.ResponseWriter, r *http.Request) {
 // GET /callback
 func (p Provider) authHandler(w http.ResponseWriter, r *http.Request) {
 
-	oauthClaims, err := p.jwtService.Get(r)
+	oauthClaims, err := p.JwtService.Get(r)
 	if err != nil {
 		rest.SendErrorJSON(w, r, http.StatusInternalServerError, err, "failed to get jwt")
 		return
@@ -160,13 +159,14 @@ func (p Provider) authHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[DEBUG] got raw user info %+v", jData)
 
 	u := p.MapUser(jData, data)
-	if p.avatarProxy != nil {
-		if avatarURL, e := p.avatarProxy.Put(u); e == nil {
+	if p.AvatarProxy != nil {
+		if avatarURL, e := p.AvatarProxy.Put(u); e == nil {
 			u.Picture = avatarURL
 		} else {
 			log.Printf("[WARN] failed to proxy avatar, %s", e)
 		}
 	}
+	u.Admin = isAdmin(u.ID, p.Admins)
 
 	authClaims := &CustomClaims{
 		User: &u,
@@ -176,7 +176,7 @@ func (p Provider) authHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	if err = p.jwtService.Set(w, authClaims); err != nil {
+	if err = p.JwtService.Set(w, authClaims); err != nil {
 		rest.SendErrorJSON(w, r, http.StatusInternalServerError, err, "failed to save user info")
 		return
 	}
@@ -188,12 +188,12 @@ func (p Provider) authHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, oauthClaims.From, http.StatusTemporaryRedirect)
 		return
 	}
-	render.JSON(w, r, jData)
+	render.JSON(w, r, &u)
 }
 
 // LogoutHandler - GET /logout
 func (p Provider) LogoutHandler(w http.ResponseWriter, r *http.Request) {
-	p.jwtService.Reset(w)
+	p.JwtService.Reset(w)
 	log.Printf("[DEBUG] logout")
 }
 

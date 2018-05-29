@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/didip/tollbooth"
@@ -23,6 +25,7 @@ import (
 	"github.com/umputun/remark/app/migrator"
 	"github.com/umputun/remark/app/rest"
 	"github.com/umputun/remark/app/rest/auth"
+	"github.com/umputun/remark/app/rest/cache"
 	"github.com/umputun/remark/app/rest/proxy"
 	"github.com/umputun/remark/app/store"
 	"github.com/umputun/remark/app/store/service"
@@ -30,20 +33,23 @@ import (
 
 // Rest is a rest access server
 type Rest struct {
-	Version       string
-	DataService   service.DataStore
-	Authenticator auth.Authenticator
-	Exporter      migrator.Exporter
-	Cache         rest.LoadingCache
-	ImageProxy    proxy.Image
-	WebRoot       string
-
+	Version         string
+	DataService     service.DataStore
+	Authenticator   auth.Authenticator
+	Exporter        migrator.Exporter
+	Cache           cache.LoadingCache
+	AvatarProxy     *proxy.Avatar
+	ImageProxy      *proxy.Image
+	WebRoot         string
+	ReadOnlyAge     int
 	ScoreThresholds struct {
 		Low      int
 		Critical int
 	}
 
-	httpServer   *http.Server
+	httpServer *http.Server
+	lock       sync.Mutex
+
 	adminService admin
 }
 
@@ -63,6 +69,7 @@ func (s *Rest) Run(port int) {
 
 	router := s.routes()
 
+	s.lock.Lock()
 	s.httpServer = &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
 		Handler:           router,
@@ -70,8 +77,23 @@ func (s *Rest) Run(port int) {
 		WriteTimeout:      5 * time.Second,
 		IdleTimeout:       30 * time.Second,
 	}
+	s.lock.Unlock()
+
 	err := s.httpServer.ListenAndServe()
 	log.Printf("[WARN] http server terminated, %s", err)
+}
+
+// Shutdown rest http server
+func (s *Rest) Shutdown() {
+	log.Print("[WARN] shutdown rest server")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s.lock.Lock()
+	if err := s.httpServer.Shutdown(ctx); err != nil {
+		log.Printf("[DEBUG] rest shutdown error, %s", err)
+	}
+	log.Print("[DEBUG] shutdown rest server completed")
+	s.lock.Unlock()
 }
 
 func (s *Rest) routes() chi.Router {
@@ -102,7 +124,7 @@ func (s *Rest) routes() chi.Router {
 		Logger(LogNone),
 		tollbooth_chi.LimitHandler(tollbooth.NewLimiter(100, nil)),
 	}
-	router.Mount(s.Authenticator.AvatarProxy.Routes(avatarMiddlewares...)) // mount avatars to /api/v1/avatar/{file.img}
+	router.Mount(s.AvatarProxy.Routes(avatarMiddlewares...)) // mount avatars to /api/v1/avatar/{file.img}
 
 	// api routes
 	router.Route("/api/v1", func(rapi chi.Router) {
@@ -120,6 +142,8 @@ func (s *Rest) routes() chi.Router {
 			ropen.Get("/list", s.listCtrl)
 			ropen.Get("/config", s.configCtrl)
 			ropen.Post("/preview", s.previewCommentCtrl)
+			ropen.Get("/info", s.infoCtrl)
+
 			ropen.Mount("/rss", s.rssRoutes())
 			ropen.Mount("/img", s.ImageProxy.Routes())
 		})
@@ -179,6 +203,13 @@ func (s *Rest) createCommentCtrl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.ReadOnlyAge > 0 {
+		if info, e := s.DataService.Info(comment.Locator, s.ReadOnlyAge); e == nil && info.ReadOnly {
+			rest.SendErrorJSON(w, r, http.StatusForbidden, errors.New("rejected"), "old post, read-only")
+			return
+		}
+	}
+
 	id, err := s.DataService.Create(comment)
 	if err != nil {
 		rest.SendErrorJSON(w, r, http.StatusInternalServerError, err, "can't save comment")
@@ -191,11 +222,13 @@ func (s *Rest) createCommentCtrl(w http.ResponseWriter, r *http.Request) {
 		rest.SendErrorJSON(w, r, http.StatusInternalServerError, err, "can't load created comment")
 		return
 	}
-	s.Cache.Flush() // reset all caches
+	s.Cache.Flush(comment.Locator.URL, "last", comment.User.ID)
+
 	render.Status(r, http.StatusCreated)
 	render.JSON(w, r, &finalComment)
 }
 
+// POST /preview, body is a comment
 func (s *Rest) previewCommentCtrl(w http.ResponseWriter, r *http.Request) {
 	comment := store.Comment{}
 	if err := render.DecodeJSON(http.MaxBytesReader(w, r.Body, hardBodyLimit), &comment); err != nil {
@@ -221,6 +254,26 @@ func (s *Rest) previewCommentCtrl(w http.ResponseWriter, r *http.Request) {
 	comment.Text = s.ImageProxy.Convert(comment.Text)
 	comment.Sanitize()
 	render.HTML(w, r, comment.Text)
+}
+
+// GET /info?site=siteID&url=post-url - get info about the post
+func (s *Rest) infoCtrl(w http.ResponseWriter, r *http.Request) {
+	locator := store.Locator{SiteID: r.URL.Query().Get("site"), URL: r.URL.Query().Get("url")}
+
+	data, err := s.Cache.Get(cache.Key(cache.URLKey(r), locator.SiteID, locator.URL), 4*time.Hour, func() ([]byte, error) {
+		info, e := s.DataService.Info(locator, s.ReadOnlyAge)
+		if e != nil {
+			return nil, e
+		}
+		return encodeJSONWithHTML(info)
+	})
+
+	if err != nil {
+		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "can't get post info")
+		return
+	}
+
+	renderJSONFromBytes(w, r, data)
 }
 
 // PUT /comment/{id}?site=siteID&url=post-url - update comment
@@ -271,7 +324,7 @@ func (s *Rest) updateCommentCtrl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Cache.Flush() // reset all caches
+	s.Cache.Flush(locator.URL, "last", user.ID)
 	render.JSON(w, r, res)
 }
 
@@ -285,7 +338,7 @@ func (s *Rest) findCommentsCtrl(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[DEBUG] get comments for %+v, sort %s, format %s", locator, sort, r.URL.Query().Get("format"))
 
-	data, err := s.Cache.Get(rest.URLKey(r), 4*time.Hour, func() ([]byte, error) {
+	data, err := s.Cache.Get(cache.Key(cache.URLKey(r), locator.SiteID, locator.URL), 4*time.Hour, func() ([]byte, error) {
 		comments, e := s.DataService.Find(locator, sort)
 		if e != nil {
 			return nil, e
@@ -294,7 +347,11 @@ func (s *Rest) findCommentsCtrl(w http.ResponseWriter, r *http.Request) {
 		var b []byte
 		switch r.URL.Query().Get("format") {
 		case "tree":
-			b, e = encodeJSONWithHTML(rest.MakeTree(maskedComments, sort))
+			tree := rest.MakeTree(maskedComments, sort, s.ReadOnlyAge)
+			if s.DataService.IsReadOnly(locator) {
+				tree.Info.ReadOnly = true
+			}
+			b, e = encodeJSONWithHTML(tree)
 		default:
 			b, e = encodeJSONWithHTML(maskedComments)
 		}
@@ -310,16 +367,16 @@ func (s *Rest) findCommentsCtrl(w http.ResponseWriter, r *http.Request) {
 
 // GET /last/{limit}?site=siteID - last comments for the siteID, across all posts, sorted by time
 func (s *Rest) lastCommentsCtrl(w http.ResponseWriter, r *http.Request) {
-
-	log.Printf("[DEBUG] get last comments for %s", r.URL.Query().Get("site"))
+	siteID := r.URL.Query().Get("site")
+	log.Printf("[DEBUG] get last comments for %s", siteID)
 
 	limit, err := strconv.Atoi(chi.URLParam(r, "limit"))
 	if err != nil {
 		limit = 0
 	}
 
-	data, err := s.Cache.Get(rest.URLKey(r), 4*time.Hour, func() ([]byte, error) {
-		comments, e := s.DataService.Last(r.URL.Query().Get("site"), limit)
+	data, err := s.Cache.Get(cache.Key(cache.URLKey(r), "last", siteID), 4*time.Hour, func() ([]byte, error) {
+		comments, e := s.DataService.Last(siteID, limit)
 		if e != nil {
 			return nil, e
 		}
@@ -381,7 +438,7 @@ func (s *Rest) findUserCommentsCtrl(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[DEBUG] get comments for userID %s, %s", userID, siteID)
 
-	data, err := s.Cache.Get(rest.URLKey(r), 4*time.Hour, func() ([]byte, error) {
+	data, err := s.Cache.Get(cache.Key(cache.URLKey(r), userID, siteID), 4*time.Hour, func() ([]byte, error) {
 		comments, count, e := s.DataService.User(siteID, userID, limit)
 		if e != nil {
 			return nil, e
@@ -408,6 +465,7 @@ func (s *Rest) configCtrl(w http.ResponseWriter, r *http.Request) {
 		Auth           []string `json:"auth_providers"`
 		LowScore       int      `json:"low_score"`
 		CriticalScore  int      `json:"critical_score"`
+		ReadOnlyAge    int      `json:"readonly_age"`
 	}
 
 	cnf := config{
@@ -417,14 +475,16 @@ func (s *Rest) configCtrl(w http.ResponseWriter, r *http.Request) {
 		Admins:         s.Authenticator.Admins,
 		LowScore:       s.ScoreThresholds.Low,
 		CriticalScore:  s.ScoreThresholds.Critical,
+		ReadOnlyAge:    s.ReadOnlyAge,
 	}
-	authNames := []string{}
+
+	cnf.Auth = []string{}
 	for _, ap := range s.Authenticator.Providers {
-		authNames = append(authNames, ap.Name)
+		cnf.Auth = append(cnf.Auth, ap.Name)
 	}
-	cnf.Auth = authNames
-	if s.Authenticator.Admins == nil { // prevent json serialization to nil
-		s.Authenticator.Admins = []string{}
+
+	if cnf.Admins == nil { // prevent json serialization to nil
+		cnf.Admins = []string{}
 	}
 	render.Status(r, http.StatusOK)
 	render.JSON(w, r, cnf)
@@ -461,7 +521,7 @@ func (s *Rest) countMultiCtrl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// key could be long for multiple posts, make it sha1
-	key := rest.URLKey(r) + strings.Join(posts, ",")
+	key := cache.URLKey(r) + strings.Join(posts, ",")
 	hasher := sha1.New()
 	if _, err := hasher.Write([]byte(key)); err != nil {
 		rest.SendErrorJSON(w, r, http.StatusInternalServerError, err, "can't make sha1 for list of urls")
@@ -469,7 +529,7 @@ func (s *Rest) countMultiCtrl(w http.ResponseWriter, r *http.Request) {
 	}
 	sha := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
 
-	data, err := s.Cache.Get(sha, 8*time.Hour, func() ([]byte, error) {
+	data, err := s.Cache.Get(cache.Key(sha, siteID), 8*time.Hour, func() ([]byte, error) {
 		counts, e := s.DataService.Counts(siteID, posts)
 		if e != nil {
 			return nil, e
@@ -497,7 +557,7 @@ func (s *Rest) listCtrl(w http.ResponseWriter, r *http.Request) {
 		skip = v
 	}
 
-	data, err := s.Cache.Get(rest.URLKey(r), 8*time.Hour, func() ([]byte, error) {
+	data, err := s.Cache.Get(cache.Key(cache.URLKey(r), siteID), 8*time.Hour, func() ([]byte, error) {
 		posts, e := s.DataService.List(siteID, limit, skip)
 		if e != nil {
 			return nil, e
@@ -531,7 +591,7 @@ func (s *Rest) voteCtrl(w http.ResponseWriter, r *http.Request) {
 		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "can't vote for comment")
 		return
 	}
-	s.Cache.Flush()
+	s.Cache.Flush(locator.URL)
 	render.JSON(w, r, JSON{"id": comment.ID, "score": comment.Score})
 }
 

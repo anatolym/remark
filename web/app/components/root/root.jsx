@@ -70,17 +70,21 @@ export default class Root extends Component {
       });
 
       setTimeout(this.checkUrlHash);
+      window.addEventListener('hashchange', this.checkUrlHash);
     });
   }
 
-  checkUrlHash() {
-    if (window.location.hash.indexOf(`#${COMMENT_NODE_CLASSNAME_PREFIX}`) === 0) {
-      const comment = document.querySelector(window.location.hash);
+  checkUrlHash(e) {
+    const hash = e ? `#${e.newURL.split('#')[1]}` : window.location.hash;
+
+    if (hash.indexOf(`#${COMMENT_NODE_CLASSNAME_PREFIX}`) === 0) {
+      if (e) e.preventDefault();
+
+      const comment = document.querySelector(hash);
 
       if (comment) {
         setTimeout(() => {
-          comment.scrollIntoView();
-          window.scrollTo(window.scrollX, 0); // sometimes smth goes wrong and iframe scrolls; we return it here
+          window.parent.postMessage(JSON.stringify({ scrollTo: comment.getBoundingClientRect().top }), '*');
         }, 500);
       }
     }

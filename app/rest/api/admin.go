@@ -13,6 +13,7 @@ import (
 
 	"github.com/umputun/remark/app/migrator"
 	"github.com/umputun/remark/app/rest"
+	"github.com/umputun/remark/app/rest/cache"
 	"github.com/umputun/remark/app/store"
 	"github.com/umputun/remark/app/store/service"
 )
@@ -21,7 +22,7 @@ import (
 type admin struct {
 	dataService  service.DataStore
 	exporter     migrator.Exporter
-	cache        rest.LoadingCache
+	cache        cache.LoadingCache
 	defAvatarURL string
 }
 
@@ -30,10 +31,11 @@ func (a *admin) routes(middlewares ...func(http.Handler) http.Handler) chi.Route
 	router.Use(middlewares...)
 	router.Delete("/comment/{id}", a.deleteCommentCtrl)
 	router.Put("/user/{userid}", a.setBlockCtrl)
+	router.Delete("/user/{userid}", a.deleteUserCtrl)
 	router.Get("/export", a.exportCtrl)
-
 	router.Put("/pin/{id}", a.setPinCtrl)
 	router.Get("/blocked", a.blockedUsersCtrl)
+	router.Put("/readonly", a.setReadOnlyCtrl)
 	return router
 }
 
@@ -44,14 +46,30 @@ func (a *admin) deleteCommentCtrl(w http.ResponseWriter, r *http.Request) {
 	locator := store.Locator{SiteID: r.URL.Query().Get("site"), URL: r.URL.Query().Get("url")}
 	log.Printf("[INFO] delete comment %s", id)
 
-	err := a.dataService.Delete(locator, id)
+	err := a.dataService.Delete(locator, id, store.SoftDelete)
 	if err != nil {
 		rest.SendErrorJSON(w, r, http.StatusInternalServerError, err, "can't delete comment")
 		return
 	}
-	a.cache.Flush()
+	a.cache.Flush(locator.SiteID, locator.URL)
 	render.Status(r, http.StatusOK)
 	render.JSON(w, r, JSON{"id": id, "locator": locator})
+}
+
+// DELETE /user/{userid}?site=side-id
+func (a *admin) deleteUserCtrl(w http.ResponseWriter, r *http.Request) {
+
+	userID := chi.URLParam(r, "userid")
+	siteID := r.URL.Query().Get("site")
+	log.Printf("[INFO] delete all user comments for %s, site %s", userID, siteID)
+
+	if err := a.dataService.DeleteUser(siteID, userID); err != nil {
+		rest.SendErrorJSON(w, r, http.StatusInternalServerError, err, "can't delete user")
+		return
+	}
+	a.cache.Flush(siteID, userID)
+	render.Status(r, http.StatusOK)
+	render.JSON(w, r, JSON{"user_id": userID, "site_id": siteID})
 }
 
 // PUT /user/{userid}?site=side-id&block=1 - block or unblock user
@@ -64,7 +82,7 @@ func (a *admin) setBlockCtrl(w http.ResponseWriter, r *http.Request) {
 		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "can't set blocking status")
 		return
 	}
-	a.cache.Flush()
+	a.cache.Flush(siteID, userID)
 	render.JSON(w, r, JSON{"user_id": userID, "site_id": siteID, "block": blockStatus})
 }
 
@@ -79,6 +97,19 @@ func (a *admin) blockedUsersCtrl(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, users)
 }
 
+// PUT /readonly?site=siteID&url=post-url&ro=1 - set or reset read-only status for the post
+func (a *admin) setReadOnlyCtrl(w http.ResponseWriter, r *http.Request) {
+	locator := store.Locator{SiteID: r.URL.Query().Get("site"), URL: r.URL.Query().Get("url")}
+	roStatus := r.URL.Query().Get("ro") == "1"
+
+	if err := a.dataService.SetReadOnly(locator, roStatus); err != nil {
+		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "can't set readonly status")
+		return
+	}
+	a.cache.Flush(locator.SiteID)
+	render.JSON(w, r, JSON{"locator": locator, "read-only": roStatus})
+}
+
 // PUT /pin/{id}?site=siteID&url=post-url&pin=1
 // mark/unmark comment as a special
 func (a *admin) setPinCtrl(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +121,7 @@ func (a *admin) setPinCtrl(w http.ResponseWriter, r *http.Request) {
 		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "can't set pin status")
 		return
 	}
-	a.cache.Flush()
+	a.cache.Flush(locator.URL)
 	render.JSON(w, r, JSON{"id": commentID, "locator": locator, "pin": pinStatus})
 }
 
@@ -104,14 +135,19 @@ func (a *admin) exportCtrl(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/gzip")
 		w.Header().Set("Content-Disposition", "attachment;filename="+exportFile)
 		w.WriteHeader(http.StatusOK)
-		writer = gzip.NewWriter(w)
+		gzWriter := gzip.NewWriter(w)
+		defer func() {
+			if e := gzWriter.Close(); e != nil {
+				log.Printf("[WARN] can't close gzip writer, %s", e)
+			}
+		}()
+		writer = gzWriter
 	}
 
 	if _, err := a.exporter.Export(writer, siteID); err != nil {
 		rest.SendErrorJSON(w, r, http.StatusInternalServerError, err, "export failed")
 		return
 	}
-
 }
 
 func (a *admin) checkBlocked(siteID string, user store.User) bool {
@@ -131,7 +167,7 @@ func (a *admin) alterComments(comments []store.Comment, r *http.Request) (res []
 		// process blocked users
 		if a.dataService.IsBlocked(c.Locator.SiteID, c.User.ID) {
 			if !isAdmin { // reset comment to deleted for non-admins
-				c.SetDeleted()
+				c.SetDeleted(store.SoftDelete)
 			}
 			c.User.Blocked = true
 			c.Deleted = true

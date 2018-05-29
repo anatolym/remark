@@ -27,15 +27,19 @@ type Accessor interface {
 	User(siteID string, userID string, limit int) ([]store.Comment, int, error) // comments by user, sorted by time
 	Count(locator store.Locator) (int, error)                                   // number of comments for the post
 	List(siteID string, limit int, skip int) ([]store.PostInfo, error)          // list of commented posts
+	Info(locator store.Locator, readonlyAge int) (store.PostInfo, error)        // get post info
 }
 
 // Admin defines all store ops avail for admin only
 type Admin interface {
-	Delete(locator store.Locator, commentID string) error     // delete comment by id
-	DeleteAll(siteID string) error                            // delete all data from site
-	SetBlock(siteID string, userID string, status bool) error // block or unblock  user
-	IsBlocked(siteID string, userID string) bool              // check if user blocked
-	Blocked(siteID string) ([]store.BlockedUser, error)       // get list of blocked users
+	Delete(locator store.Locator, commentID string, mode store.DeleteMode) error // delete comment by id
+	DeleteAll(siteID string) error                                               // delete all data from site
+	DeleteUser(siteID string, userID string) error                               // remove all comments from user
+	SetBlock(siteID string, userID string, status bool) error                    // block or unblock  user
+	IsBlocked(siteID string, userID string) bool                                 // check if user blocked
+	Blocked(siteID string) ([]store.BlockedUser, error)                          // get list of blocked users
+	SetReadOnly(locator store.Locator, status bool) error                        // set/reset read-only flag
+	IsReadOnly(locator store.Locator) bool                                       // check if post read-only
 }
 
 // sortComments is for engines can't sort data internally

@@ -1,12 +1,14 @@
 package api
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,6 +44,60 @@ func TestAdmin_Delete(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, "", cr.Text)
 	assert.True(t, cr.Deleted)
+}
+
+func TestAdmin_DeleteUser(t *testing.T) {
+	srv, ts := prep(t)
+	assert.NotNil(t, srv)
+	defer cleanup(ts)
+
+	c1 := store.Comment{Text: "test test #1", Orig: "o test test #1", User: store.User{ID: "id1", Name: "name"},
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah"}}
+	c2 := store.Comment{Text: "test test #2", Orig: "o test test #2", User: store.User{ID: "id2", Name: "name"}, ParentID: "p1",
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah"}}
+	c3 := store.Comment{Text: "test test #3", Orig: "o test test #3", User: store.User{ID: "id2", Name: "name"}, ParentID: "",
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah"}}
+
+	// write comments directly to store to keep user id
+	id1, err := srv.DataService.Create(c1)
+	assert.NoError(t, err)
+	_, err = srv.DataService.Create(c2)
+	assert.NoError(t, err)
+	_, err = srv.DataService.Create(c3)
+	assert.NoError(t, err)
+
+	client := http.Client{}
+	req, err := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/v1/admin/user/%s?site=radio-t", ts.URL, "id2"), nil)
+	assert.Nil(t, err)
+	withBasicAuth(req, "dev", "password")
+	resp, err := client.Do(req)
+	assert.Nil(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+
+	// all 3 comments here, but for id2 they deleted
+	res, code := get(t, ts.URL+"/api/v1/find?site=radio-t&url=https://radio-t.com/blah&sort=+time")
+	assert.Equal(t, 200, code)
+	comments := []store.Comment{}
+	err = json.Unmarshal([]byte(res), &comments)
+	assert.Nil(t, err)
+	assert.Equal(t, 3, len(comments), "should have 3 comment")
+
+	// id1 comment untouched
+	assert.Equal(t, id1, comments[0].ID)
+	assert.Equal(t, "o test test #1", comments[0].Orig)
+	assert.False(t, comments[0].Deleted)
+	t.Logf("%+v", comments[0].User)
+
+	// id2 comments fully deleted
+	assert.Equal(t, "", comments[1].Text)
+	assert.Equal(t, "", comments[1].Orig)
+	assert.Equal(t, store.User{Name: "deleted", ID: "deleted", Picture: "", Admin: false, Blocked: false, IP: ""}, comments[1].User)
+	assert.True(t, comments[1].Deleted)
+
+	assert.Equal(t, "", comments[2].Text)
+	assert.Equal(t, "", comments[2].Orig)
+	assert.Equal(t, store.User{Name: "deleted", ID: "deleted", Picture: "", Admin: false, Blocked: false, IP: ""}, comments[1].User)
+	assert.True(t, comments[2].Deleted)
 }
 
 func TestAdmin_Pin(t *testing.T) {
@@ -175,7 +231,51 @@ func TestAdmin_BlockedList(t *testing.T) {
 	assert.Equal(t, "user2", users[1].ID)
 }
 
-func TestAdmin_Export(t *testing.T) {
+func TestAdmin_ReadOnly(t *testing.T) {
+	srv, ts := prep(t)
+	assert.NotNil(t, srv)
+	defer cleanup(ts)
+
+	c1 := store.Comment{Text: "test test #1", Locator: store.Locator{SiteID: "radio-t",
+		URL: "https://radio-t.com/blah"}, User: store.User{Name: "user1 name", ID: "user1"}}
+	c2 := store.Comment{Text: "test test #2", ParentID: "p1", Locator: store.Locator{SiteID: "radio-t",
+		URL: "https://radio-t.com/blah"}, User: store.User{Name: "user2", ID: "user2"}}
+
+	_, err := srv.DataService.Create(c1)
+	assert.Nil(t, err)
+	_, err = srv.DataService.Create(c2)
+	assert.Nil(t, err)
+
+	info, err := srv.DataService.Info(store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah"}, 0)
+	assert.Nil(t, err)
+	assert.False(t, info.ReadOnly)
+
+	client := http.Client{}
+
+	// set post to read-only
+	req, err := http.NewRequest(http.MethodPut,
+		fmt.Sprintf("%s/api/v1/admin/readonly?site=radio-t&url=https://radio-t.com/blah&ro=1", ts.URL), nil)
+	assert.Nil(t, err)
+	withBasicAuth(req, "dev", "password")
+	_, err = client.Do(req)
+	require.Nil(t, err)
+	info, err = srv.DataService.Info(store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah"}, 0)
+	assert.Nil(t, err)
+	assert.True(t, info.ReadOnly)
+
+	// resset post's read-only
+	req, err = http.NewRequest(http.MethodPut,
+		fmt.Sprintf("%s/api/v1/admin/readonly?site=radio-t&url=https://radio-t.com/blah&ro=0", ts.URL), nil)
+	assert.Nil(t, err)
+	withBasicAuth(req, "dev", "password")
+	_, err = client.Do(req)
+	require.Nil(t, err)
+	info, err = srv.DataService.Info(store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah"}, 0)
+	assert.Nil(t, err)
+	assert.False(t, info.ReadOnly)
+}
+
+func TestAdmin_ExportStream(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
@@ -193,4 +293,36 @@ func TestAdmin_Export(t *testing.T) {
 	assert.Equal(t, 2, strings.Count(body, "\n"))
 	assert.Equal(t, 2, strings.Count(body, "\"text\""))
 	t.Logf("%s", body)
+}
+
+func TestAdmin_ExportFile(t *testing.T) {
+	srv, ts := prep(t)
+	assert.NotNil(t, srv)
+	defer cleanup(ts)
+
+	c1 := store.Comment{Text: "test test #1",
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah1"}}
+	c2 := store.Comment{Text: "test test #2", ParentID: "p1",
+		Locator: store.Locator{SiteID: "radio-t", URL: "https://radio-t.com/blah2"}}
+
+	addComment(t, c1, ts)
+	addComment(t, c2, ts)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequest("GET", ts.URL+"/api/v1/admin/export?site=radio-t&mode=file", nil)
+	require.Nil(t, err)
+	withBasicAuth(req, "dev", "password")
+	resp, err := client.Do(req)
+	require.Nil(t, err)
+
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, "application/gzip", resp.Header.Get("Content-Type"))
+
+	ungzReader, err := gzip.NewReader(resp.Body)
+	assert.NoError(t, err)
+	ungzBody, err := ioutil.ReadAll(ungzReader)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, strings.Count(string(ungzBody), "\n"))
+	assert.Equal(t, 2, strings.Count(string(ungzBody), "\"text\""))
+	t.Logf("%s", string(ungzBody))
 }

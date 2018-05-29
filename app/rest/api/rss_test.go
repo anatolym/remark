@@ -16,7 +16,7 @@ func TestServer_RssPost(t *testing.T) {
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
 
-	waitOnMinChange()
+	waitOnSecChange()
 
 	c1 := store.Comment{
 		Text:    "test 123",
@@ -47,6 +47,9 @@ func TestServer_RssPost(t *testing.T) {
 
 	expected, res = cleanRssFormatting(expected, res)
 	assert.Equal(t, expected, res)
+
+	res, code = get(t, ts.URL+"/api/v1/rss/post?site=radio-t-bad&url=https://radio-t.com/blah1")
+	assert.Equal(t, 400, code)
 }
 
 func TestServer_RssSite(t *testing.T) {
@@ -54,7 +57,7 @@ func TestServer_RssSite(t *testing.T) {
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
 
-	waitOnMinChange()
+	waitOnSecChange()
 
 	pubDate := time.Now().Format(time.RFC1123Z)
 
@@ -98,6 +101,9 @@ func TestServer_RssSite(t *testing.T) {
 
 	expected, res = cleanRssFormatting(expected, res)
 	assert.Equal(t, expected, res)
+
+	_, code = get(t, ts.URL+"/api/v1/rss/site?site=bad-radio-t")
+	assert.Equal(t, 400, code)
 }
 
 func TestServer_RssWithReply(t *testing.T) {
@@ -105,7 +111,7 @@ func TestServer_RssWithReply(t *testing.T) {
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
 
-	waitOnMinChange()
+	waitOnSecChange()
 
 	pubDate := time.Now().Format(time.RFC1123Z)
 
@@ -152,9 +158,12 @@ func TestServer_RssWithReply(t *testing.T) {
 	assert.Equal(t, expected, res)
 }
 
-func waitOnMinChange() {
-	if time.Now().Second() == 59 {
-		time.Sleep(1001 * time.Millisecond)
+func waitOnSecChange() {
+	for {
+		if time.Now().Nanosecond() < 100000000 {
+			break
+		}
+		time.Sleep(10 * time.Nanosecond)
 	}
 }
 

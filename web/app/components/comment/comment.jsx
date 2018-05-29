@@ -18,6 +18,8 @@ export default class Comment extends Component {
       editTimeLeft: null,
     };
 
+    this.votingPromise = Promise.resolve();
+
     this.updateState(props);
 
     this.decreaseScore = this.decreaseScore.bind(this);
@@ -177,7 +179,11 @@ export default class Comment extends Component {
     const { id } = this.props.data;
 
     if (confirm('Do you want to delete this comment?')) {
-      this.setState({ deleted: true });
+      this.setState({
+        deleted: true,
+        isEditing: false,
+        isReplying: false,
+      });
 
       api.remove({ id }).then(() => {
         api.getComment({ id }).then(comment => store.replaceComment(comment));
@@ -197,9 +203,13 @@ export default class Comment extends Component {
       score: score + 1,
     });
 
-    api.vote({ id, url, value: 1 }).then(() => {
-      api.getComment({ id }).then(comment => store.replaceComment(comment));
-    });
+    this.votingPromise = this.votingPromise
+      .then(() => {
+        return api.vote({ id, url, value: 1 })
+          .then(() => {
+            api.getComment({ id }).then(comment => store.replaceComment(comment));
+          });
+      });
   }
 
   decreaseScore() {
@@ -214,9 +224,13 @@ export default class Comment extends Component {
       score: score - 1,
     });
 
-    api.vote({ id, url, value: -1 }).then(() => {
-      api.getComment({ id }).then(comment => store.replaceComment(comment));
-    });
+    this.votingPromise = this.votingPromise
+      .then(() => {
+        return api.vote({ id, url, value: -1 })
+          .then(() => {
+            api.getComment({ id }).then(comment => store.replaceComment(comment));
+          });
+      });
   }
 
   onReply(...rest) {
@@ -276,6 +290,16 @@ export default class Comment extends Component {
               )
           ),
       time: formatTime(new Date(data.time)),
+      orig: isEditing
+        ? (
+          data.orig && data.orig
+            .replace(/&[#A-Za-z0-9]+;/gi, entity => {
+              const span = document.createElement('span');
+              span.innerHTML = entity;
+              return span.innerText;
+            })
+        )
+        : data.orig,
       score: {
         value: Math.abs(score),
         sign: score > 0 ? '+' : (score < 0 ? '−' : null),

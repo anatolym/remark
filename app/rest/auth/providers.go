@@ -2,7 +2,6 @@ package auth
 
 import (
 	"encoding/json"
-	"strings"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/facebook"
@@ -18,17 +17,17 @@ func NewGoogle(p Params) Provider {
 		Name:        "google",
 		Endpoint:    google.Endpoint,
 		RedirectURL: p.RemarkURL + "/auth/google/callback",
-		Scopes:      []string{"https://www.googleapis.com/auth/userinfo.email"},
+		Scopes:      []string{"https://www.googleapis.com/auth/userinfo.profile"},
 		InfoURL:     "https://www.googleapis.com/oauth2/v3/userinfo",
 		MapUser: func(data userData, _ []byte) store.User {
 			userInfo := store.User{
 				// encode email with provider name to avoid collision if same id returned by other provider
-				ID:      "google_" + store.EncodeID(data.value("email")),
+				ID:      "google_" + store.EncodeID(data.value("sub")),
 				Name:    data.value("name"),
 				Picture: data.value("picture"),
 			}
 			if userInfo.Name == "" {
-				userInfo.Name = strings.Split(data.value("email"), "@")[0]
+				userInfo.Name = "noname_" + userInfo.ID[8:12]
 			}
 			return userInfo
 		},
@@ -37,11 +36,12 @@ func NewGoogle(p Params) Provider {
 
 // NewGithub makes github oauth2 provider
 func NewGithub(p Params) Provider {
+
 	return initProvider(p, Provider{
 		Name:        "github",
 		Endpoint:    github.Endpoint,
 		RedirectURL: p.RemarkURL + "/auth/github/callback",
-		Scopes:      []string{"user:email"},
+		Scopes:      []string{},
 		InfoURL:     "https://api.github.com/user",
 		MapUser: func(data userData, _ []byte) store.User {
 			userInfo := store.User{
@@ -54,7 +54,7 @@ func NewGithub(p Params) Provider {
 				userInfo.Name = data.value("login")
 			}
 			if userInfo.Name == "" {
-				userInfo.Name = userInfo.ID
+				userInfo.Name = userInfo.ID[0:16]
 			}
 			return userInfo
 		},
@@ -87,7 +87,7 @@ func NewFacebook(p Params) Provider {
 				Name: data.value("name"),
 			}
 			if userInfo.Name == "" {
-				userInfo.Name = userInfo.ID
+				userInfo.Name = userInfo.ID[0:16]
 			}
 
 			uinfoJSON := uinfo{}

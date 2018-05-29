@@ -1,4 +1,4 @@
-import { BASE_URL, NODE_ID } from 'common/constants';
+import { BASE_URL, NODE_ID, COMMENT_NODE_CLASSNAME_PREFIX } from 'common/constants';
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
@@ -61,11 +61,21 @@ function init() {
       if (data.remarkIframeHeight) {
         iframe.style.height = `${data.remarkIframeHeight}px`;
       }
+
+      if (data.scrollTo) {
+        window.scrollTo(window.pageXOffset, data.scrollTo + iframe.getBoundingClientRect().top + window.pageYOffset);
+      }
     } catch (e) {}
   }
 
-  function postHashToIframe() {
-    iframe.contentWindow.postMessage(JSON.stringify({ hash: location.hash }), '*');
+  function postHashToIframe(e) {
+    const hash = e ? `#${e.newURL.split('#')[1]}` : window.location.hash;
+
+    if (hash.indexOf(`#${COMMENT_NODE_CLASSNAME_PREFIX}`) === 0) {
+      if (e) e.preventDefault();
+
+      iframe.contentWindow.postMessage(JSON.stringify({ hash }), '*');
+    }
   }
 }
 

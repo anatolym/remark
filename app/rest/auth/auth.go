@@ -8,17 +8,15 @@ import (
 	"strings"
 
 	"github.com/umputun/remark/app/rest"
-	"github.com/umputun/remark/app/rest/proxy"
 	"github.com/umputun/remark/app/store"
 )
 
 // Authenticator is top level auth object providing middlewares
 type Authenticator struct {
-	JWTService  *JWT
-	AvatarProxy *proxy.Avatar
-	Admins      []string
-	Providers   []Provider
-	DevPasswd   string
+	JWTService *JWT
+	Providers  []Provider
+	Admins     []string
+	DevPasswd  string
 }
 
 var devUser = store.User{
@@ -43,7 +41,7 @@ func (a *Authenticator) Auth(reqAuth bool) func(http.Handler) http.Handler {
 
 			claims, err := a.JWTService.Get(r)
 			if err != nil && reqAuth { // in full auth lack of session causes Unauthorized
-				log.Printf("[WARN] failed auth, %s", err)
+				log.Printf("[DEBUG] failed auth, %s", err)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -54,21 +52,17 @@ func (a *Authenticator) Auth(reqAuth bool) func(http.Handler) http.Handler {
 			}
 
 			if claims.User == nil && reqAuth {
+				log.Print("[DEBUG] failed auth, no user info presented in the claim")
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
 
 			if claims.User != nil { // if uinfo in token populate it to context
 				user := *claims.User
-				for _, admin := range a.Admins {
-					if admin == user.ID {
-						user.Admin = true
-						break
-					}
-				}
+				user.Admin = isAdmin(user.ID, a.Admins) // dbl-check for admin to reset admin flag even if token has it
 				// refresh token if it close to expiration
 				if _, err := a.JWTService.Refresh(w, r); err != nil {
-					log.Printf("[WARN] can't refresh jwt, %s", err)
+					log.Printf("[DEBUG] can't refresh jwt, %s", err)
 				}
 				r = rest.SetUserInfo(r, user)
 			}
@@ -125,4 +119,13 @@ func (a *Authenticator) basicDevUser(w http.ResponseWriter, r *http.Request) boo
 	}
 
 	return true
+}
+
+func isAdmin(userID string, admins []string) bool {
+	for _, admin := range admins {
+		if admin == userID {
+			return true
+		}
+	}
+	return false
 }
