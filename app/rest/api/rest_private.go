@@ -132,13 +132,18 @@ func (s *Rest) updateCommentCtrl(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, res)
 }
 
-// GET /user - returns user info
+// GET /user?site=siteID - returns user info
 func (s *Rest) userInfoCtrl(w http.ResponseWriter, r *http.Request) {
 	user, err := rest.GetUserInfo(r)
 	if err != nil {
 		rest.SendErrorJSON(w, r, http.StatusUnauthorized, err, "can't get user info")
 		return
 	}
+
+	if siteID := r.URL.Query().Get("site"); siteID != "" {
+		user.Verified = s.DataService.IsVerified(siteID, user.ID)
+	}
+
 	render.JSON(w, r, user)
 }
 
@@ -252,5 +257,6 @@ func (s *Rest) deleteMeCtrl(w http.ResponseWriter, r *http.Request) {
 		rest.SendErrorJSON(w, r, http.StatusInternalServerError, err, "can't make token")
 		return
 	}
-	render.JSON(w, r, JSON{"site": siteID, "user_id": user.ID, "token": tokenStr})
+	link := fmt.Sprintf("%s/api/v1/admin/deleteme?token=%s", s.RemarkURL, tokenStr)
+	render.JSON(w, r, JSON{"site": siteID, "user_id": user.ID, "token": tokenStr, "link": link})
 }

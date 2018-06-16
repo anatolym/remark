@@ -7,7 +7,7 @@ Remark42 is a self-hosted, lightweight, and simple (yet functional) comment engi
 * Import from disqus
 * Markdown support
 * Moderator can remove comments and block users
-* Voting and pinning system
+* Voting, pinning and verification system
 * Sortable comments
 * Extractor for recent comments, cross-post
 * RSS for all comments and each post
@@ -17,6 +17,7 @@ Remark42 is a self-hosted, lightweight, and simple (yet functional) comment engi
 * Clean, lightweight and fully customizable UI
 * Multi-site mode from a single instance
 * Integration with automatic ssl via [nginx-le](https://github.com/umputun/nginx-le)
+* [Privacy focused](#privacy)
 
 ## Install
 
@@ -30,38 +31,66 @@ Remark42 is a self-hosted, lightweight, and simple (yet functional) comment engi
 
 #### Parameters
 
-| Command line      | Environment          | Default                | Multi | Description                                    |
-| ----------------- | -------------------- | ---------------------- | ----- | ---------------------------------------------- |
-| --url             | REMARK_URL           | `https://remark42.com` | no    | url to remark server                           |
-| --bolt            | BOLTDB_PATH          | `./var`                | no    | path to data directory                         |
-| --site            | SITE                 | `remark`               | yes   | site name(s)                                   |
-| --admin           | ADMIN                |                        | yes   | admin names (list of user ids)                 |
-| --backup          | BACKUP_PATH          | `./var/backup`         | no    | backups location                               |
-| --max-back        | MAX_BACKUP_FILES     | `10`                   | no    | max backup files to keep                       |
-| --max-cache-items | MAX_CACHE_ITEMS      | `1000`                 | no    | max number of cached items, `0` - unlimited    |
-| --max-cache-value | MAX_CACHE_VALUE      | `65536`                | no    | max size of cached value, `0` - unlimited      |
-| --max-cache-size  | MAX_CACHE_SIZE       | `50000000`             | no    | max size of all cached values, `0` - unlimited |
-| --avatars         | AVATAR_STORE         | `./var/avatars`        | no    | avatars location                               |
-| --secret          | SECRET               |                        | no    | secret key, required                           |
-| --max-comment     | MAX_COMMENT_SIZE     | 2048                   | no    | comment's size limit                           |
-| --google-cid      | REMARK_GOOGLE_CID    |                        | no    | Google OAuth client ID                         |
-| --google-csec     | REMARK_GOOGLE_CSEC   |                        | no    | Google OAuth client secret                     |
-| --facebook-cid    | REMARK_FACEBOOK_CID  |                        | no    | Facebook OAuth client ID                       |
-| --facebook-csec   | REMARK_FACEBOOK_CSEC |                        | no    | Facebook OAuth client secret                   |
-| --github-cid      | REMARK_GITHUB_CID    |                        | no    | Github OAuth client ID                         |
-| --github-csec     | REMARK_GITHUB_CSEC   |                        | no    | Github OAuth client secret                     |
-| --yandex-cid      | REMARK_YANDEX_CID    |                        | no    | Yandex OAuth client ID                         |
-| --yandex-csec     | REMARK_YANDEX_CSEC   |                        | no    | Yandex OAuth client secret                     |
-| --low-score       | LOW_SCORE            | `-5`                   | no    | Low score threshold                            |
-| --critical-score  | CRITICAL_SCORE       | `-10`                  | no    | Critical score threshold                       |
-| --img-proxy       | IMG_PROXY            | `false`                | no    | Enable http->https proxy for images            |
-| --dbg             | DEBUG                | `false`                | no    | debug mode                                     |
-| --dev-passwd      | DEV_PASSWD           |                        | no    | password for `dev` user                        |
+| Command line       | Environment        | Default               | Description                                    |
+| ------------------ | ------------------ | --------------------- | ---------------------------------------------- |
+| url                | REMARK_URL         |                       | url to remark42 server, _required_             |
+| secret             | SECRET             |                       | secret key, _required_                         |
+| bolt               | BOLTDB_PATH        | `./var`               | path to data directory                         |
+| site               | SITE               | `remark`              | site name(s), _multi_                          |
+| admin              | ADMIN              |                       | admin names (list of user ids), _multi_        |
+| admin-email        | ADMIN_EMAIL        | `admin@${REMARK_URL}` | admin email                                    |
+| backup             | BACKUP_PATH        | `./var/backup`        | backups location                               |
+| max-back           | MAX_BACKUP_FILES   | `10`                  | max backup files to keep                       |
+| max-cache-items    | MAX_CACHE_ITEMS    | `1000`                | max number of cached items, `0` - unlimited    |
+| max-cache-value    | MAX_CACHE_VALUE    | `65536`               | max size of cached value, `0` - unlimited      |
+| max-cache-size     | MAX_CACHE_SIZE     | `50000000`            | max size of all cached values, `0` - unlimited |
+| avatars            | AVATAR_STORE       | `./var/avatars`       | avatars location                               |
+| max-comment        | MAX_COMMENT_SIZE   | 2048                  | comment's size limit                           |
+| auth.google.cid    | AUTH_GOOGLE_CID    |                       | Google OAuth client ID                         |
+| auth.google.csec   | AUTH_GOOGLE_CSEC   |                       | Google OAuth client secret                     |
+| auth.facebook.cid  | AUTH_FACEBOOK_CID  |                       | Facebook OAuth client ID                       |
+| auth.facebook.csec | AUTH_FACEBOOK_CSEC |                       | Facebook OAuth client secret                   |
+| auth.github.cid    | AUTH_GITHUB_CID    |                       | Github OAuth client ID                         |
+| auth.github.csec   | AUTH_GITHUB_CSEC   |                       | Github OAuth client secret                     |
+| auth.yandex.cid    | AUTH_YANDEX_CID    |                       | Yandex OAuth client ID                         |
+| auth.yandex.csec   | AUTH_YANDEX_CSEC   |                       | Yandex OAuth client secret                     |
+| low-score          | LOW_SCORE          | `-5`                  | Low score threshold                            |
+| critical-score     | CRITICAL_SCORE     | `-10`                 | Critical score threshold                       |
+| img-proxy          | IMG_PROXY          | `false`               | Enable http->https proxy for images            |
+| dbg                | DEBUG              | `false`               | debug mode                                     |
+| dev-passwd         | DEV_PASSWD         |                       | password for `dev` user                        |
 
+* command line parameters are long form `--<key>=value`, i.e. `--site=https://demo.remark42.com`
+* _multi_ parameters separated by `,` in the environment or repeated with command line key, like `--site=s1 --site=s2 ...`
+* _required_ parameters have to be presented in the environment or provided in command line
 
-**user has to provide secret key, can be any long and hard-to-guess string.**
+##### Required parameters
 
-_all multi parameters separated by `,` in environment or repeated with command line key, like `--site=s1 --site=s2 ...`_
+Most of the parameters have sane defaults and don't require customization. There are only a few parameters user has to define:  
+
+1. `SECRET` - secret key, can be any long and hard-to-guess string.
+1. `REMARK_URL` - url pointing to your remark42 server, i.e. `https://demo.reamark42.com`
+2. At least one pair of `AUTH_<PROVIDER>_CID` and `AUTH_<PROVIDER>_CSEC` defining oauth2 provider(s)
+
+The minimal `docker-compose.yml` has to include all required parameters:
+
+```yaml
+version: '2'
+
+services:
+    remark42:
+        image: umputun/remark42:master
+        restart: always
+        container_name: "remark42"
+        environment:
+            - REMARK_URL=https://demo.remark42.com  # url pointing to your remark42 server
+            - SECRET=abcd-123456-xyz-$%^&           # secret key
+            - AUTH_GITHUB_CID=12345667890           # oauth2 client ID
+            - AUTH_GITHUB_CSEC=abcdefg12345678      # oauth2 client secret
+            - USER=1001                             # UID on the host machine, i.e `id -u`
+        volumes:
+            - ./var:/srv/var                        # persistent volume to store all remark42 data 
+```
 
 #### Register oauth2 providers
 
@@ -194,7 +223,8 @@ Add this snippet to the bottom of web page:
 <script>
   var remark_config = {
     site_id: 'YOUR_SITE_ID',
-    url: 'PAGE_URL', // optional param; if url isn't defined window.location.href will be used 
+    url: 'PAGE_URL', // optional param; if it isn't defined window.location.href will be used
+    max_shown_comments: 10, // optional param; if it isn't defined default value (15) will be used 
   };
 
   (function() {
@@ -411,18 +441,35 @@ Sort can be `time`, `active` or `score`. Supported sort order with prefix -/+, i
 * `DELETE /api/v1/admin/user/{userid}?site=site-id&block=1` - delete all user's comments.
 * `PUT /api/v1/admin/readonly?site=site-id&url=post-url&ro=1` - set read-only status
 * `PUT /api/v1/admin/verify/{userid}?site=site-id&verified=1` - set verified status
+* `GET /api/v1/admin/deleteme?token=token` - process deleteme user's request
 
 _all admin calls require auth and admin privilege_
+
+
+## Privacy 
+
+* Remark42 is trying to be very sensitive to any private or semi-private information.
+* Authentication requesting the lowest (minimal) possible scope from providers. All extra information returned by them dropped immediately and not stored in any form.
+* Generally remark42 keeps user id, username and avatar link only. None of these fields exposed directly - id and name hashed, avatar proxied.
+* There is no tracking of any sort.
+* Login mechanic uses JWT stored in a cookie (httpOnly, secured). The second cookie (XSRF_TOKEN) is a random id preventing Cross-Site Request Forgery
+* There is no cross-site login, i.e., user's behavior can't be analyzed across independent sites running remark42.
+* There are no third-party analytic services involved.
+* User can request all information remark42 knows about and export to gz file.
+* Supported complete cleanup of all information related to user activity on demand.
+* Cookie lifespan can be restricted to session-only. 
+* All potentially sensitive data stored by remark42 hashed and encrypted.
+
 
 ## Technical details
 
 * Data stored in [boltdb](https://github.com/coreos/bbolt) (embedded key/value database) files under `BOLTDB_PATH`
 * Each site stored in a separate boltbd file.
-* In order to migrate/move remark42 to another host boltbd files should be transferred.
+* In order to migrate/move remark42 to another host boltbd files as well as avatars directory `AVATAR_STORE` should be transferred.
 * Automatic backup process runs every 24h and exports all content in json-like format to `backup-remark-YYYYMMDD.gz`.
 * Authentication implemented with [jwt](https://github.com/dgrijalva/jwt-go) stored in a cookie. It uses HttpOnly, secure cookies.
-* All heavy REST calls cached internally, default expiration 4h
-* User's activity throttled globally (up to 1000 simultaneous requests) and limited locally (per user, up to 10 req/sec)
+* All heavy REST calls cached internally in LRU cache limited by `MAX_CACHE_ITEMS` and `MAX_CACHE_SIZE`.
+* User's activity throttled globally (up to 1000 simultaneous requests) and limited locally (per user, usually up to 10 req/sec)
 * Request timeout set to 60sec
 * Development mode (`--dev-password` set) allows to test remark42 without social login and with admin privileges. Adds basic-auth for username: `dev`, password: `${DEV_PASSWD}`. **should not be used in production deployment**
 * User can vote for the comment multiple times but only to change his/her vote. Double-voting not allowed.
@@ -430,3 +477,7 @@ _all admin calls require auth and admin privilege_
 * User ID hashed and prefixed by oauth provider name to avoid collisions and potential abuse.
 * All avatars cached locally to prevent rate limiters from google/github/facebook/yandex.
 * Docker build uses [publicly available](https://github.com/umputun/baseimage) base images.
+
+## Current status
+
+Remark42 is still under development and the first stable v1.0 is about to be released. API (v1) is stable and won't have any breaking changes. 

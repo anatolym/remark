@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -15,52 +16,54 @@ import (
 	"github.com/hashicorp/logutils"
 	"github.com/jessevdk/go-flags"
 	"github.com/pkg/errors"
-	"github.com/umputun/remark/app/store/engine"
-	"github.com/umputun/remark/app/store/service"
 
 	"github.com/umputun/remark/app/migrator"
 	"github.com/umputun/remark/app/rest/api"
 	"github.com/umputun/remark/app/rest/auth"
 	"github.com/umputun/remark/app/rest/cache"
 	"github.com/umputun/remark/app/rest/proxy"
+	"github.com/umputun/remark/app/store/engine"
+	"github.com/umputun/remark/app/store/service"
 )
 
 // Opts with command line flags and env
+// nolint:maligned
 type Opts struct {
-	BoltPath  string   `long:"bolt" env:"BOLTDB_PATH" default:"./var" description:"parent dir for bolt files"`
-	Sites     []string `long:"site" env:"SITE" default:"remark" description:"site names" env-delim:","`
-	RemarkURL string   `long:"url" env:"REMARK_URL" default:"https://remark42.com" description:"url to remark"`
-	Admins    []string `long:"admin" env:"ADMIN" description:"admin(s) names" env-delim:","`
+	SecretKey string `long:"secret" env:"SECRET" required:"true" description:"secret key"`
+	RemarkURL string `long:"url" env:"REMARK_URL" required:"true" description:"url to remark"`
 
-	DevPasswd string `long:"dev-passwd" env:"DEV_PASSWD" default:"" description:"development mode password"`
-	Dbg       bool   `long:"dbg" env:"DEBUG" description:"debug mode"`
+	BoltPath       string   `long:"bolt" env:"BOLTDB_PATH" default:"./var" description:"parent dir for bolt files"`
+	Sites          []string `long:"site" env:"SITE" default:"remark" description:"site names" env-delim:","`
+	Admins         []string `long:"admin" env:"ADMIN" description:"admin(s) names" env-delim:","`
+	AdminEmail     string   `long:"admin-email" env:"ADMIN_EMAIL" default:"" description:"admin email"`
+	DevPasswd      string   `long:"dev-passwd" env:"DEV_PASSWD" default:"" description:"development mode password"`
+	BackupLocation string   `long:"backup" env:"BACKUP_PATH" default:"./var/backup" description:"backups location"`
+	MaxBackupFiles int      `long:"max-back" env:"MAX_BACKUP_FILES" default:"10" description:"max backups to keep"`
+	AvatarStore    string   `long:"avatars" env:"AVATAR_STORE" default:"./var/avatars" description:"avatars location"`
+	ImageProxy     bool     `long:"img-proxy" env:"IMG_PROXY" description:"enable image proxy"`
+	MaxCommentSize int      `long:"max-comment" env:"MAX_COMMENT_SIZE" default:"2048" description:"max comment size"`
+	MaxCachedItems int      `long:"max-cache-items" env:"MAX_CACHE_ITEMS" default:"1000" description:"max cached items"`
+	MaxCachedValue int      `long:"max-cache-value" env:"MAX_CACHE_VALUE" default:"65536" description:"max size of cached value"`
+	MaxCacheSize   int      `long:"max-cache-size" env:"MAX_CACHE_SIZE" default:"50000000" description:"max size of total cache"`
+	LowScore       int      `long:"low-score" env:"LOW_SCORE" default:"-5" description:"low score threshold"`
+	CriticalScore  int      `long:"critical-score" env:"CRITICAL_SCORE" default:"-10" description:"critical score threshold"`
+	ReadOnlyAge    int      `long:"read-age" env:"READONLY_AGE" default:"0" description:"read-only age of comments"`
+	Port           int      `long:"port" env:"REMARK_PORT" default:"8080" description:"port"`
+	WebRoot        string   `long:"web-root" env:"REMARK_WEB_ROOT" default:"./web" description:"web root directory"`
+	Dbg            bool     `long:"dbg" env:"DEBUG" description:"debug mode"`
 
-	BackupLocation string `long:"backup" env:"BACKUP_PATH" default:"./var/backup" description:"backups location"`
-	MaxBackupFiles int    `long:"max-back" env:"MAX_BACKUP_FILES" default:"10" description:"max backups to keep"`
-	AvatarStore    string `long:"avatars" env:"AVATAR_STORE" default:"./var/avatars" description:"avatars location"`
-	ImageProxy     bool   `long:"img-proxy" env:"IMG_PROXY" description:"enable image proxy"`
+	Auth struct {
+		Google   AuthGroup `group:"google" namespace:"google" env-namespace:"GOOGLE" description:"Google OAuth"`
+		Github   AuthGroup `group:"github" namespace:"github" env-namespace:"GITHUB" description:"Github OAuth"`
+		Facebook AuthGroup `group:"facebook" namespace:"facebook" env-namespace:"FACEBOOK" description:"Facebook OAuth"`
+		Yandex   AuthGroup `group:"yandex" namespace:"yandex" env-namespace:"YANDEX" description:"Yandex OAuth"`
+	} `group:"auth" namespace:"auth" env-namespace:"AUTH"`
+}
 
-	MaxCommentSize int `long:"max-comment" env:"MAX_COMMENT_SIZE" default:"2048" description:"max comment size"`
-	MaxCachedItems int `long:"max-cache-items" env:"MAX_CACHE_ITEMS" default:"1000" description:"max cached items"`
-	MaxCachedValue int `long:"max-cache-value" env:"MAX_CACHE_VALUE" default:"65536" description:"max size of cached value"`
-	MaxCacheSize   int `long:"max-cache-size" env:"MAX_CACHE_SIZE" default:"50000000" description:"max size of total cache"`
-
-	SecretKey     string `long:"secret" env:"SECRET" required:"true" description:"secret key"`
-	LowScore      int    `long:"low-score" env:"LOW_SCORE" default:"-5" description:"low score threshold"`
-	CriticalScore int    `long:"critical-score" env:"CRITICAL_SCORE" default:"-10" description:"critical score threshold"`
-	ReadOnlyAge   int    `long:"read-age" env:"READONLY_AGE" default:"0" description:"read-only age of comments"`
-
-	GoogleCID    string `long:"google-cid" env:"REMARK_GOOGLE_CID" description:"Google OAuth client ID"`
-	GoogleCSEC   string `long:"google-csec" env:"REMARK_GOOGLE_CSEC" description:"Google OAuth client secret"`
-	GithubCID    string `long:"github-cid" env:"REMARK_GITHUB_CID" description:"Github OAuth client ID"`
-	GithubCSEC   string `long:"github-csec" env:"REMARK_GITHUB_CSEC" description:"Github OAuth client secret"`
-	FacebookCID  string `long:"facebook-cid" env:"REMARK_FACEBOOK_CID" description:"Facebook OAuth client ID"`
-	FacebookCSEC string `long:"facebook-csec" env:"REMARK_FACEBOOK_CSEC" description:"Facebook OAuth client secret"`
-	YandexCID    string `long:"yandex-cid" env:"REMARK_YANDEX_CID" description:"Yandex OAuth client ID"`
-	YandexCSEC   string `long:"yandex-csec" env:"REMARK_YANDEX_CSEC" description:"Yandex OAuth client secret"`
-
-	Port    int    `long:"port" env:"REMARK_PORT" default:"8080" description:"port"`
-	WebRoot string `long:"web-root" env:"REMARK_WEB_ROOT" default:"./web" description:"web root directory"`
+// AuthGroup defines options group for auth params
+type AuthGroup struct {
+	CID  string `long:"cid" env:"CID" description:"OAuth client ID"`
+	CSEC string `long:"csec" env:"CSEC" description:"OAuth client secret"`
 }
 
 var revision = "unknown"
@@ -82,7 +85,10 @@ func main() {
 	if _, e := p.ParseArgs(os.Args[1:]); e != nil {
 		os.Exit(1)
 	}
+
+	setupLog(opts.Dbg)
 	log.Print("[INFO] started remark")
+	resetEnv("SECRET", "AUTH_GOOGLE_CSEC", "AUTH_GITHUB_CSEC", "AUTH_FACEBOOK_CSEC", "AUTH_YANDEX_CSEC")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { // catch signal and invoke graceful termination
@@ -104,20 +110,27 @@ func main() {
 // New prepares application and return it with all active parts
 // doesn't start anything
 func New(opts Opts) (*Application, error) {
-	setupLog(opts.Dbg)
 
 	if err := makeDirs(opts.BoltPath, opts.BackupLocation, opts.AvatarStore); err != nil {
 		return nil, err
 	}
 
-	dataService := service.DataStore{
-		Interface:      makeBoltStore(opts.Sites, opts.BoltPath),
+	if !strings.HasPrefix(opts.RemarkURL, "http://") && !strings.HasPrefix(opts.RemarkURL, "https://") {
+		return nil, errors.Errorf("invalid remark42 url %s", opts.RemarkURL)
+	}
+
+	boltStore, err := makeBoltStore(opts.Sites, opts.BoltPath)
+	if err != nil {
+		return nil, err
+	}
+	dataService := &service.DataStore{
+		Interface:      boltStore,
 		EditDuration:   5 * time.Minute,
 		Secret:         opts.SecretKey,
 		MaxCommentSize: opts.MaxCommentSize,
 	}
 
-	loadingCache, err := cache.NewLoadingCache(cache.MaxValSize(opts.MaxCachedValue), cache.MaxKeys(opts.MaxCachedItems),
+	loadingCache, err := cache.NewMemoryCache(cache.MaxValSize(opts.MaxCachedValue), cache.MaxKeys(opts.MaxCachedItems),
 		cache.PostFlushFn(postFlushFn(opts.Sites, opts.Port)))
 	if err != nil {
 		return nil, err
@@ -126,19 +139,19 @@ func New(opts Opts) (*Application, error) {
 	jwtService := auth.NewJWT(opts.SecretKey, strings.HasPrefix(opts.RemarkURL, "https://"), 7*24*time.Hour)
 
 	avatarProxy := &proxy.Avatar{
-		StorePath: opts.AvatarStore,
+		Store:     proxy.NewFSAvatarStore(opts.AvatarStore),
 		RoutePath: "/api/v1/avatar",
 		RemarkURL: strings.TrimSuffix(opts.RemarkURL, "/"),
 	}
 
-	exporter := &migrator.Remark{DataStore: &dataService}
+	exporter := &migrator.Remark{DataStore: dataService}
 
 	migr := &api.Migrator{
 		Version:        revision,
 		Cache:          loadingCache,
-		NativeImporter: &migrator.Remark{DataStore: &dataService},
-		DisqusImporter: &migrator.Disqus{DataStore: &dataService},
-		NativeExported: &migrator.Remark{DataStore: &dataService},
+		NativeImporter: &migrator.Remark{DataStore: dataService},
+		DisqusImporter: &migrator.Disqus{DataStore: dataService},
+		NativeExported: &migrator.Remark{DataStore: dataService},
 		SecretKey:      opts.SecretKey,
 	}
 
@@ -147,17 +160,27 @@ func New(opts Opts) (*Application, error) {
 		DataService: dataService,
 		Exporter:    exporter,
 		WebRoot:     opts.WebRoot,
+		RemarkURL:   opts.RemarkURL,
 		ImageProxy:  &proxy.Image{Enabled: opts.ImageProxy, RoutePath: "/api/v1/img", RemarkURL: opts.RemarkURL},
 		AvatarProxy: avatarProxy,
 		ReadOnlyAge: opts.ReadOnlyAge,
 		Authenticator: auth.Authenticator{
 			JWTService: jwtService,
 			Admins:     opts.Admins,
+			AdminEmail: opts.AdminEmail,
 			Providers:  makeAuthProviders(jwtService, avatarProxy, dataService, opts),
 			DevPasswd:  opts.DevPasswd,
 		},
 		Cache: loadingCache,
 	}
+
+	// no admin email, use admin@domain
+	if srv.Authenticator.AdminEmail == "" {
+		if u, err := url.Parse(opts.RemarkURL); err == nil {
+			srv.Authenticator.AdminEmail = "admin@" + u.Host
+		}
+	}
+
 	srv.ScoreThresholds.Low, srv.ScoreThresholds.Critical = opts.LowScore, opts.CriticalScore
 	tch := make(chan struct{})
 	return &Application{restSrv: srv, migratorSrv: migr, exporter: exporter, Opts: opts, terminated: tch}, nil
@@ -202,16 +225,16 @@ func (a *Application) activateBackup(ctx context.Context) {
 }
 
 // makeBoltStore creates store for all sites
-func makeBoltStore(siteNames []string, path string) engine.Interface {
+func makeBoltStore(siteNames []string, path string) (engine.Interface, error) {
 	sites := []engine.BoltSite{}
 	for _, site := range siteNames {
 		sites = append(sites, engine.BoltSite{SiteID: site, FileName: fmt.Sprintf("%s/%s.db", path, site)})
 	}
 	result, err := engine.NewBoltDB(bolt.Options{Timeout: 30 * time.Second}, sites...)
 	if err != nil {
-		log.Fatalf("[ERROR] can't initialize data store, %+v", err)
+		return nil, errors.Wrap(err, "can't initialize data store")
 	}
-	return result
+	return result, nil
 }
 
 // mkdir -p for all dirs
@@ -243,7 +266,7 @@ func makeDirs(dirs ...string) error {
 	return nil
 }
 
-func makeAuthProviders(jwtService *auth.JWT, avatarProxy *proxy.Avatar, ds service.DataStore, opts Opts) []auth.Provider {
+func makeAuthProviders(jwtService *auth.JWT, avatarProxy *proxy.Avatar, ds *service.DataStore, opts Opts) []auth.Provider {
 
 	makeParams := func(cid, secret string) auth.Params {
 		return auth.Params{
@@ -259,17 +282,17 @@ func makeAuthProviders(jwtService *auth.JWT, avatarProxy *proxy.Avatar, ds servi
 	}
 
 	providers := []auth.Provider{}
-	if opts.GoogleCID != "" && opts.GoogleCSEC != "" {
-		providers = append(providers, auth.NewGoogle(makeParams(opts.GoogleCID, opts.GoogleCSEC)))
+	if opts.Auth.Google.CID != "" && opts.Auth.Google.CSEC != "" {
+		providers = append(providers, auth.NewGoogle(makeParams(opts.Auth.Google.CID, opts.Auth.Google.CSEC)))
 	}
-	if opts.GithubCID != "" && opts.GithubCSEC != "" {
-		providers = append(providers, auth.NewGithub(makeParams(opts.GithubCID, opts.GithubCSEC)))
+	if opts.Auth.Github.CID != "" && opts.Auth.Github.CSEC != "" {
+		providers = append(providers, auth.NewGithub(makeParams(opts.Auth.Github.CID, opts.Auth.Github.CSEC)))
 	}
-	if opts.FacebookCID != "" && opts.FacebookCSEC != "" {
-		providers = append(providers, auth.NewFacebook(makeParams(opts.FacebookCID, opts.FacebookCSEC)))
+	if opts.Auth.Facebook.CID != "" && opts.Auth.Facebook.CSEC != "" {
+		providers = append(providers, auth.NewFacebook(makeParams(opts.Auth.Facebook.CID, opts.Auth.Facebook.CSEC)))
 	}
-	if opts.YandexCID != "" && opts.YandexCSEC != "" {
-		providers = append(providers, auth.NewYandex(makeParams(opts.YandexCID, opts.YandexCSEC)))
+	if opts.Auth.Yandex.CID != "" && opts.Auth.Yandex.CSEC != "" {
+		providers = append(providers, auth.NewYandex(makeParams(opts.Auth.Yandex.CID, opts.Auth.Yandex.CSEC)))
 	}
 	if len(providers) == 0 {
 		log.Printf("[WARN] no auth providers defined")
@@ -298,6 +321,14 @@ func postFlushFn(sites []string, port int) func() {
 					log.Printf("[WARN] failed to close response body, %s", err)
 				}
 			}
+		}
+	}
+}
+
+func resetEnv(envs ...string) {
+	for _, env := range envs {
+		if err := os.Unsetenv(env); err != nil {
+			log.Printf("[WARN] can't unset env %s, %s", env, err)
 		}
 	}
 }

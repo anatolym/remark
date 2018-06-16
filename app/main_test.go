@@ -19,7 +19,7 @@ import (
 
 func TestApplication(t *testing.T) {
 	app, ctx := prepApp(t, 18080, 500*time.Millisecond)
-	go app.Run(ctx)
+	go func() { _ = app.Run(ctx) }()
 	time.Sleep(100 * time.Millisecond) // let server start
 
 	// send ping
@@ -38,7 +38,36 @@ func TestApplication(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, resp.StatusCode)
 	body, _ = ioutil.ReadAll(resp.Body)
 	t.Log(string(body))
+
+	assert.Equal(t, "admin@demo.remark42.com", app.restSrv.Authenticator.AdminEmail, "default admin email")
+
 	app.Wait()
+}
+
+func TestApplicationFailed(t *testing.T) {
+	opts := Opts{}
+	p := flags.NewParser(&opts, flags.Default)
+
+	// RO bolt location
+	p.ParseArgs([]string{"--secret=123456", "--url=https://demo.remark42.com", "--bolt=/dev/null"})
+	_, err := New(opts)
+	assert.EqualError(t, err, "can't initialize data store: failed to make boltdb for /dev/null/remark.db: "+
+		"open /dev/null/remark.db: not a directory")
+	t.Log(err)
+
+	// RO backup location
+	opts = Opts{}
+	p.ParseArgs([]string{"--secret=123456", "--url=https://demo.remark42.com", "--bolt=/tmp", "--backup=/dev/null/not-writable"})
+	_, err = New(opts)
+	assert.EqualError(t, err, "can't check directory status for /dev/null/not-writable: stat /dev/null/not-writable: not a directory")
+	t.Log(err)
+
+	// invalid url
+	opts = Opts{}
+	p.ParseArgs([]string{"--secret=123456", "--url=demo.remark42.com", "--bolt=/tmp"})
+	_, err = New(opts)
+	assert.EqualError(t, err, "invalid remark42 url demo.remark42.com")
+	t.Log(err)
 }
 
 func TestApplicationShutdown(t *testing.T) {
@@ -50,7 +79,9 @@ func TestApplicationShutdown(t *testing.T) {
 }
 
 func TestApplicationMainSignal(t *testing.T) {
-	os.Args = []string{"test", "--secret=123456", "--bolt=/tmp/xyz", "--backup=/tmp", "--avatars=/tmp", "--port=18100"}
+	os.Args = []string{"test", "--secret=123456", "--bolt=/tmp/xyz", "--backup=/tmp", "--avatars=/tmp",
+		"--port=18100", "--url=https://demo.remark42.com"}
+
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
@@ -64,13 +95,13 @@ func prepApp(t *testing.T, port int, duration time.Duration) (*Application, cont
 	// prepare options
 	opts := Opts{}
 	p := flags.NewParser(&opts, flags.Default)
-	p.ParseArgs([]string{"--secret=123456", "--dev-passwd=password"})
+	p.ParseArgs([]string{"--secret=123456", "--dev-passwd=password", "--url=https://demo.remark42.com"})
 	opts.AvatarStore, opts.BackupLocation = "/tmp", "/tmp"
 	opts.BoltPath = fmt.Sprintf("/tmp/%d", port)
-	opts.GithubCSEC, opts.GithubCID = "csec", "cid"
-	opts.GoogleCSEC, opts.GoogleCID = "csec", "cid"
-	opts.FacebookCSEC, opts.FacebookCID = "csec", "cid"
-	opts.YandexCSEC, opts.YandexCID = "csec", "cid"
+	opts.Auth.Github.CSEC, opts.Auth.Github.CID = "csec", "cid"
+	opts.Auth.Google.CSEC, opts.Auth.Google.CID = "csec", "cid"
+	opts.Auth.Facebook.CSEC, opts.Auth.Facebook.CID = "csec", "cid"
+	opts.Auth.Yandex.CSEC, opts.Auth.Yandex.CID = "csec", "cid"
 	opts.Port = port
 
 	os.Remove(opts.BoltPath + "/remark.db")

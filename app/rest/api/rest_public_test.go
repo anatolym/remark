@@ -381,6 +381,7 @@ func TestRest_Config(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 300., j["edit_duration"])
 	assert.EqualValues(t, []interface{}([]interface{}{"a1", "a2"}), j["admins"])
+	assert.Equal(t, "admin@remark-42.com", j["admin_email"])
 	assert.Equal(t, 4000., j["max_comment_size"])
 	assert.Equal(t, -5., j["low_score"])
 	assert.Equal(t, -10., j["critical_score"])
@@ -392,6 +393,8 @@ func TestRest_Info(t *testing.T) {
 	srv, ts := prep(t)
 	assert.NotNil(t, srv)
 	defer cleanup(ts)
+
+	srv.ReadOnlyAge = 10000000 // make sure we don't hit read-only
 
 	user := store.User{ID: "user1", Name: "user name 1"}
 	c1 := store.Comment{User: user, Text: "test test #1", Locator: store.Locator{SiteID: "radio-t",
@@ -422,4 +425,16 @@ func TestRest_Info(t *testing.T) {
 	assert.Equal(t, 400, code)
 	_, code = get(t, ts.URL+"/api/v1/info?site=radio-t-no&url=https://radio-t.com/blah-no")
 	assert.Equal(t, 400, code)
+}
+
+func TestRest_Robots(t *testing.T) {
+	srv, ts := prep(t)
+	assert.NotNil(t, srv)
+	defer cleanup(ts)
+
+	body, code := get(t, ts.URL+"/robots.txt")
+	assert.Equal(t, 200, code)
+	assert.Equal(t, "User-agent: *\nDisallow: /auth/\nDisallow: /api/\nAllow: /api/v1/find\n"+
+		"Allow: /api/v1/last\nAllow: /api/v1/id\nAllow: /api/v1/count\nAllow: /api/v1/counts\n"+
+		"Allow: /api/v1/list\nAllow: /api/v1/config\nAllow: /api/v1/img\nAllow: /api/v1/avatar\n", string(body))
 }

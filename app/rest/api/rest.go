@@ -31,13 +31,14 @@ import (
 // Rest is a rest access server
 type Rest struct {
 	Version         string
-	DataService     service.DataStore
+	DataService     *service.DataStore
 	Authenticator   auth.Authenticator
 	Exporter        migrator.Exporter
 	Cache           cache.LoadingCache
 	AvatarProxy     *proxy.Avatar
 	ImageProxy      *proxy.Image
 	WebRoot         string
+	RemarkURL       string
 	ReadOnlyAge     int
 	ScoreThresholds struct {
 		Low      int
@@ -100,9 +101,10 @@ func (s *Rest) routes() chi.Router {
 	router.Use(AppInfo("remark42", s.Version), Ping)
 
 	s.adminService = admin{
-		dataService: s.DataService,
-		exporter:    s.Exporter,
-		cache:       s.Cache,
+		dataService:   s.DataService,
+		exporter:      s.Exporter,
+		cache:         s.Cache,
+		authenticator: s.Authenticator,
 	}
 
 	ipFn := func(ip string) string { return store.HashValue(ip, s.DataService.Secret)[:12] } // logger uses it for anonymization
@@ -164,9 +166,13 @@ func (s *Rest) routes() chi.Router {
 		})
 	})
 
-	router.With(tollbooth_chi.LimitHandler(tollbooth.NewLimiter(10, nil))).
+	router.With(tollbooth_chi.LimitHandler(tollbooth.NewLimiter(50, nil))).
 		Get("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
-			render.PlainText(w, r, "User-agent: *\nDisallow: /auth/\nDisallow: /api/\nAllow: /api/v1/find\n")
+			allowed := []string{"/find", "/last", "/id", "/count", "/counts", "/list", "/config", "/img", "/avatar"}
+			for i := range allowed {
+				allowed[i] = "Allow: /api/v1" + allowed[i]
+			}
+			render.PlainText(w, r, "User-agent: *\nDisallow: /auth/\nDisallow: /api/\n"+strings.Join(allowed, "\n")+"\n")
 		})
 
 	// file server for static content from /web

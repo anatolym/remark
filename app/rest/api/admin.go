@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/render"
+	"github.com/umputun/remark/app/rest/auth"
 
 	"github.com/umputun/remark/app/migrator"
 	"github.com/umputun/remark/app/rest"
@@ -20,10 +21,10 @@ import (
 
 // admin provides router for all requests available for admin users only
 type admin struct {
-	dataService  service.DataStore
-	exporter     migrator.Exporter
-	cache        cache.LoadingCache
-	defAvatarURL string
+	dataService   *service.DataStore
+	exporter      migrator.Exporter
+	cache         cache.LoadingCache
+	authenticator auth.Authenticator
 }
 
 func (a *admin) routes(middlewares ...func(http.Handler) http.Handler) chi.Router {
@@ -32,6 +33,7 @@ func (a *admin) routes(middlewares ...func(http.Handler) http.Handler) chi.Route
 	router.Delete("/comment/{id}", a.deleteCommentCtrl)
 	router.Put("/user/{userid}", a.setBlockCtrl)
 	router.Delete("/user/{userid}", a.deleteUserCtrl)
+	router.Get("/deleteme", a.deleteMeRequestCtrl)
 	router.Put("/verify/{userid}", a.setVerifyCtrl)
 	router.Get("/export", a.exportCtrl)
 	router.Put("/pin/{id}", a.setPinCtrl)
@@ -57,7 +59,7 @@ func (a *admin) deleteCommentCtrl(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, JSON{"id": id, "locator": locator})
 }
 
-// DELETE /user/{userid}?site=side-id
+// DELETE /user/{userid}?site=side-id - delete all user comments for requested userid
 func (a *admin) deleteUserCtrl(w http.ResponseWriter, r *http.Request) {
 
 	userID := chi.URLParam(r, "userid")
@@ -71,6 +73,29 @@ func (a *admin) deleteUserCtrl(w http.ResponseWriter, r *http.Request) {
 	a.cache.Flush(siteID, userID)
 	render.Status(r, http.StatusOK)
 	render.JSON(w, r, JSON{"user_id": userID, "site_id": siteID})
+}
+
+// GET /deleteme?token=jwt - delete all user comments by user's request. Gets info about deleted used from provided token
+// request made GET to allow direct click from the email sent by user
+func (a *admin) deleteMeRequestCtrl(w http.ResponseWriter, r *http.Request) {
+
+	token := r.URL.Query().Get("token")
+
+	claims, err := a.authenticator.JWTService.Parse(token)
+	if err != nil {
+		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "can't process token")
+		return
+	}
+
+	log.Printf("[INFO] delete all user comments by request for %s, site %s", claims.User.ID, claims.SiteID)
+
+	if err := a.dataService.DeleteUser(claims.SiteID, claims.User.ID); err != nil {
+		rest.SendErrorJSON(w, r, http.StatusBadRequest, err, "can't delete user")
+		return
+	}
+	a.cache.Flush(claims.SiteID, claims.User.ID)
+	render.Status(r, http.StatusOK)
+	render.JSON(w, r, JSON{"user_id": claims.User.ID, "site_id": claims.SiteID})
 }
 
 // PUT /user/{userid}?site=side-id&block=1 - block or unblock user
@@ -179,13 +204,19 @@ func (a *admin) alterComments(comments []store.Comment, r *http.Request) (res []
 
 	for i, c := range comments {
 
+		blocked := a.dataService.IsBlocked(c.Locator.SiteID, c.User.ID)
 		// process blocked users
-		if a.dataService.IsBlocked(c.Locator.SiteID, c.User.ID) {
+		if blocked {
 			if !isAdmin { // reset comment to deleted for non-admins
 				c.SetDeleted(store.SoftDelete)
 			}
 			c.User.Blocked = true
 			c.Deleted = true
+		}
+
+		// set verified status retroactively
+		if !blocked {
+			c.User.Verified = a.dataService.IsVerified(c.Locator.SiteID, c.User.ID)
 		}
 
 		// hide info from non-admins
